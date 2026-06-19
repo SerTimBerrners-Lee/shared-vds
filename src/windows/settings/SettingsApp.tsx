@@ -35,6 +35,7 @@ import {
   type ReverseTunnelSettings,
   type ServerSessionProfile,
   type ServerSessionSettings,
+  type TerminalId,
   type ThemePreference,
   type VdsHealthSnapshot,
   type VdsHealthSnapshotsByIdentity,
@@ -86,6 +87,11 @@ const APP_REPOSITORY_URL = "https://github.com/SerTimBerrners-Lee/shared-vds";
 const VDS_REFERRAL_URL = "https://rdp-onedash.ru/r/a49cd94";
 const APP_LAUNCH_COUNT_SESSION_KEY = "shared-vds-app-launch-counted";
 const VDS_REFERRAL_MIN_LAUNCH_COUNT = 3;
+const VDS_HEALTH_SNAPSHOT_PERSIST_INTERVAL_MS = 60_000;
+
+function appWindowIsVisible(): boolean {
+  return document.visibilityState === "visible";
+}
 
 function resolveInitialView(): ActiveView {
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
@@ -1156,6 +1162,15 @@ export function SettingsApp(): ReactElement {
   const launchCountRecordedRef = useRef(false);
   const attemptedTunnelAutostartKeysRef = useRef<Set<string>>(new Set());
   const attemptedVdsLocationIdentitiesRef = useRef<Set<string>>(new Set());
+  const vdsHealthSnapshotsRef = useRef<VdsHealthSnapshotsByIdentity>({});
+  const dirtyVdsHealthSnapshotIdentitiesRef = useRef<Set<string>>(new Set());
+  const lastVdsHealthSnapshotPersistedAtRef = useRef<Record<string, number>>(
+    {},
+  );
+  const vdsHealthSnapshotPersistTimerRef = useRef<number | null>(null);
+  const vdsHealthSnapshotPersistTimerDueAtRef = useRef<number | null>(null);
+  const vdsHealthSnapshotPersistInFlightRef = useRef(false);
+  const forceVdsHealthSnapshotPersistAfterInFlightRef = useRef(false);
   const openedProfile = getServerSessionProfile(appSettings, openedProfileId);
   const activeServerSession =
     openedProfile?.config ?? DEFAULT_SERVER_SESSION_SETTINGS;
@@ -1200,17 +1215,129 @@ export function SettingsApp(): ReactElement {
   }, []);
 
   const persistVdsHealthSnapshots = useCallback(
-    (snapshots: VdsHealthSnapshotsByIdentity): void => {
-      void saveVdsHealthSnapshotsByIdentity(snapshots).catch((error) => {
+    async (snapshots: VdsHealthSnapshotsByIdentity): Promise<void> => {
+      try {
+        await saveVdsHealthSnapshotsByIdentity(snapshots);
+      } catch (error) {
         void logError(
           "SETTINGS_APP",
           `Failed to save VDS health snapshots: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
-      });
+      }
     },
     [],
+  );
+
+  const clearVdsHealthSnapshotPersistTimer = useCallback((): void => {
+    if (vdsHealthSnapshotPersistTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(vdsHealthSnapshotPersistTimerRef.current);
+    vdsHealthSnapshotPersistTimerRef.current = null;
+    vdsHealthSnapshotPersistTimerDueAtRef.current = null;
+  }, []);
+
+  const flushDirtyVdsHealthSnapshots = useCallback(async (): Promise<void> => {
+    clearVdsHealthSnapshotPersistTimer();
+
+    if (vdsHealthSnapshotPersistInFlightRef.current) {
+      if (dirtyVdsHealthSnapshotIdentitiesRef.current.size > 0) {
+        forceVdsHealthSnapshotPersistAfterInFlightRef.current = true;
+      }
+
+      return;
+    }
+
+    if (dirtyVdsHealthSnapshotIdentitiesRef.current.size === 0) {
+      return;
+    }
+
+    const dirtyIdentities = Array.from(
+      dirtyVdsHealthSnapshotIdentitiesRef.current,
+    );
+    dirtyVdsHealthSnapshotIdentitiesRef.current.clear();
+    vdsHealthSnapshotPersistInFlightRef.current = true;
+
+    try {
+      await persistVdsHealthSnapshots(vdsHealthSnapshotsRef.current);
+      const persistedAt = Date.now();
+
+      for (const identity of dirtyIdentities) {
+        lastVdsHealthSnapshotPersistedAtRef.current[identity] = persistedAt;
+      }
+    } finally {
+      vdsHealthSnapshotPersistInFlightRef.current = false;
+
+      if (dirtyVdsHealthSnapshotIdentitiesRef.current.size > 0) {
+        if (forceVdsHealthSnapshotPersistAfterInFlightRef.current) {
+          forceVdsHealthSnapshotPersistAfterInFlightRef.current = false;
+          void flushDirtyVdsHealthSnapshots();
+          return;
+        }
+
+        const dueAt = Date.now() + VDS_HEALTH_SNAPSHOT_PERSIST_INTERVAL_MS;
+        vdsHealthSnapshotPersistTimerDueAtRef.current = dueAt;
+        vdsHealthSnapshotPersistTimerRef.current = window.setTimeout(() => {
+          void flushDirtyVdsHealthSnapshots();
+        }, VDS_HEALTH_SNAPSHOT_PERSIST_INTERVAL_MS);
+      } else {
+        forceVdsHealthSnapshotPersistAfterInFlightRef.current = false;
+      }
+    }
+  }, [clearVdsHealthSnapshotPersistTimer, persistVdsHealthSnapshots]);
+
+  const markVdsHealthSnapshotsDirty = useCallback(
+    (
+      identity: string,
+      snapshots: VdsHealthSnapshotsByIdentity,
+      { force = false }: { force?: boolean } = {},
+    ): void => {
+      vdsHealthSnapshotsRef.current = snapshots;
+      dirtyVdsHealthSnapshotIdentitiesRef.current.add(identity);
+
+      if (force) {
+        void flushDirtyVdsHealthSnapshots();
+        return;
+      }
+
+      if (vdsHealthSnapshotPersistInFlightRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+      const lastPersistedAt =
+        lastVdsHealthSnapshotPersistedAtRef.current[identity] ?? 0;
+      const dueAt =
+        lastPersistedAt > 0
+          ? lastPersistedAt + VDS_HEALTH_SNAPSHOT_PERSIST_INTERVAL_MS
+          : now;
+
+      if (dueAt <= now) {
+        void flushDirtyVdsHealthSnapshots();
+        return;
+      }
+
+      if (
+        vdsHealthSnapshotPersistTimerRef.current !== null &&
+        vdsHealthSnapshotPersistTimerDueAtRef.current !== null &&
+        vdsHealthSnapshotPersistTimerDueAtRef.current <= dueAt
+      ) {
+        return;
+      }
+
+      clearVdsHealthSnapshotPersistTimer();
+      vdsHealthSnapshotPersistTimerDueAtRef.current = dueAt;
+      vdsHealthSnapshotPersistTimerRef.current = window.setTimeout(() => {
+        void flushDirtyVdsHealthSnapshots();
+      }, dueAt - now);
+    },
+    [
+      clearVdsHealthSnapshotPersistTimer,
+      flushDirtyVdsHealthSnapshots,
+    ],
   );
 
   const updateRememberedRunningTunnels = useCallback(
@@ -1308,10 +1435,16 @@ export function SettingsApp(): ReactElement {
           return;
         }
 
-        setVdsHealthSnapshotsByIdentity((current) => ({
-          ...snapshots,
-          ...current,
-        }));
+        setVdsHealthSnapshotsByIdentity((current) => {
+          const nextSnapshots = {
+            ...snapshots,
+            ...current,
+          };
+
+          vdsHealthSnapshotsRef.current = nextSnapshots;
+
+          return nextSnapshots;
+        });
       })
       .catch((error) => {
         if (!cancelled) {
@@ -1328,6 +1461,16 @@ export function SettingsApp(): ReactElement {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    vdsHealthSnapshotsRef.current = vdsHealthSnapshotsByIdentity;
+  }, [vdsHealthSnapshotsByIdentity]);
+
+  useEffect(() => {
+    return () => {
+      void flushDirtyVdsHealthSnapshots();
+    };
+  }, [flushDirtyVdsHealthSnapshots]);
 
   useEffect(() => {
     if (!settingsReady) {
@@ -1358,8 +1501,15 @@ export function SettingsApp(): ReactElement {
     }
 
     let cancelled = false;
+    let requestInFlight = false;
 
-    const syncVdsSystemStatus = async (): Promise<void> => {
+    const syncVdsSystemStatus = async (force = false): Promise<void> => {
+      if ((!force && !appWindowIsVisible()) || requestInFlight) {
+        return;
+      }
+
+      requestInFlight = true;
+
       try {
         const status = await getVdsSystemStatus(activeLocalSshPort);
         if (!cancelled) {
@@ -1374,15 +1524,28 @@ export function SettingsApp(): ReactElement {
             }`,
           );
         }
+      } finally {
+        requestInFlight = false;
       }
     };
 
-    void syncVdsSystemStatus();
+    const syncVdsSystemStatusOnVisible = (): void => {
+      if (appWindowIsVisible()) {
+        void syncVdsSystemStatus(true);
+      }
+    };
+
+    void syncVdsSystemStatus(true);
     const timer = window.setInterval(() => void syncVdsSystemStatus(), 6000);
+    document.addEventListener("visibilitychange", syncVdsSystemStatusOnVisible);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener(
+        "visibilitychange",
+        syncVdsSystemStatusOnVisible,
+      );
     };
   }, [activeLocalSshPort, activeView, settingsReady]);
 
@@ -1420,7 +1583,7 @@ export function SettingsApp(): ReactElement {
             ),
           };
 
-          persistVdsHealthSnapshots(nextSnapshots);
+          markVdsHealthSnapshotsDirty(identity, nextSnapshots);
 
           return nextSnapshots;
         });
@@ -1437,7 +1600,7 @@ export function SettingsApp(): ReactElement {
     };
   }, [
     activeView,
-    persistVdsHealthSnapshots,
+    markVdsHealthSnapshotsDirty,
     settingsReady,
     vdsHealthIdentity,
     vdsLocation,
@@ -1471,14 +1634,17 @@ export function SettingsApp(): ReactElement {
           ),
         };
 
-        persistVdsHealthSnapshots(nextSnapshots);
+        markVdsHealthSnapshotsDirty(identity, nextSnapshots);
 
         return nextSnapshots;
       });
     };
 
-    const syncVdsHealthStatus = async (showLoading: boolean): Promise<void> => {
-      if (requestInFlight) {
+    const syncVdsHealthStatus = async (
+      showLoading: boolean,
+      force = false,
+    ): Promise<void> => {
+      if ((!force && !appWindowIsVisible()) || requestInFlight) {
         return;
       }
 
@@ -1514,19 +1680,32 @@ export function SettingsApp(): ReactElement {
       }
     };
 
+    const syncVdsHealthStatusOnVisible = (): void => {
+      if (appWindowIsVisible()) {
+        void syncVdsHealthStatus(false, true);
+      }
+    };
+
     void syncVdsHealthStatus(true);
     const timer = window.setInterval(
       () => void syncVdsHealthStatus(false),
       vdsHealthPollIntervalMs,
     );
+    document.addEventListener("visibilitychange", syncVdsHealthStatusOnVisible);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener(
+        "visibilitychange",
+        syncVdsHealthStatusOnVisible,
+      );
+      void flushDirtyVdsHealthSnapshots();
     };
   }, [
     activeView,
-    persistVdsHealthSnapshots,
+    flushDirtyVdsHealthSnapshots,
+    markVdsHealthSnapshotsDirty,
     settingsReady,
     vdsHealthIdentity,
     vdsHealthPollIntervalMs,
@@ -1585,7 +1764,7 @@ export function SettingsApp(): ReactElement {
 
         if (vdsSystemStatus.localSsh.canOpenSettings) {
           try {
-            await openLocalSshSettings();
+            await openLocalSshSettings(appSettings.terminalPreference);
           } catch (error) {
             void logError(
               "SETTINGS_APP",
@@ -1609,6 +1788,7 @@ export function SettingsApp(): ReactElement {
     void requestLocalSshPermission();
   }, [
     appSettings.remoteLoginPromptedForPort,
+    appSettings.terminalPreference,
     settingsReady,
     t,
     vdsSystemStatus,
@@ -1616,8 +1796,15 @@ export function SettingsApp(): ReactElement {
 
   useEffect(() => {
     let cancelled = false;
+    let requestInFlight = false;
 
-    const syncStatus = async (): Promise<void> => {
+    const syncStatus = async (force = false): Promise<void> => {
+      if ((!force && !appWindowIsVisible()) || requestInFlight) {
+        return;
+      }
+
+      requestInFlight = true;
+
       try {
         const [nextLocalStatus, nextReverseStatus] = await Promise.all([
           getLocalTunnelStatus(),
@@ -1636,15 +1823,25 @@ export function SettingsApp(): ReactElement {
             }`,
           );
         }
+      } finally {
+        requestInFlight = false;
       }
     };
 
-    void syncStatus();
+    const syncStatusOnVisible = (): void => {
+      if (appWindowIsVisible()) {
+        void syncStatus(true);
+      }
+    };
+
+    void syncStatus(true);
     const timer = window.setInterval(() => void syncStatus(), 4000);
+    document.addEventListener("visibilitychange", syncStatusOnVisible);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncStatusOnVisible);
     };
   }, []);
 
@@ -1781,6 +1978,36 @@ export function SettingsApp(): ReactElement {
     settingsReady,
   ]);
 
+  const updateTerminalPreference = useCallback(
+    async (terminalPreference: TerminalId): Promise<void> => {
+      if (appSettings.terminalPreference === terminalPreference) {
+        return;
+      }
+
+      const nextSettings = {
+        ...appSettings,
+        terminalPreference,
+      };
+
+      setAppSettings(nextSettings);
+      await saveSettings({ terminalPreference });
+      await emit(SETTINGS_UPDATED_EVENT).catch((error) => {
+        void logError(
+          "SETTINGS_APP",
+          `Failed to emit settings update event: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    },
+    [appSettings],
+  );
+
+  const handleTerminalPreferenceChange = useCallback(
+    (terminalId: TerminalId): void => {
+      void updateTerminalPreference(terminalId);
+    },
+    [updateTerminalPreference],
+  );
+
   const updateServerSession = async (
     patch: Partial<ServerSessionSettings>,
   ): Promise<void> => {
@@ -1876,6 +2103,7 @@ export function SettingsApp(): ReactElement {
   const selectServerSessionProfile = async (
     profileId: string,
   ): Promise<void> => {
+    await flushDirtyVdsHealthSnapshots();
     setVdsHealthLoading(false);
     setOpenedProfileId(profileId);
     setActiveView("vds");
@@ -1889,8 +2117,9 @@ export function SettingsApp(): ReactElement {
   };
 
   const refreshVdsHealth = useCallback((): void => {
+    void flushDirtyVdsHealthSnapshots();
     setVdsHealthRefreshNonce((current) => current + 1);
-  }, []);
+  }, [flushDirtyVdsHealthSnapshots]);
 
   const openVdsReferral = async (): Promise<void> => {
     try {
@@ -2251,6 +2480,7 @@ export function SettingsApp(): ReactElement {
                   profileId={openedProfile.id}
                   config={activeServerSession}
                   settingsReady={settingsReady}
+                  terminalPreference={appSettings.terminalPreference}
                   localTunnelStatuses={localTunnelStatuses}
                   reverseTunnelStatuses={reverseTunnelStatuses}
                   localTunnelBusyId={localTunnelBusyId}
@@ -2264,6 +2494,7 @@ export function SettingsApp(): ReactElement {
                   onConfigChange={(patch) => {
                     void updateServerSession(patch);
                   }}
+                  onTerminalPreferenceChange={handleTerminalPreferenceChange}
                   onStartLocalTunnel={(tunnel) => {
                     void startLocalSshTunnel(tunnel);
                   }}

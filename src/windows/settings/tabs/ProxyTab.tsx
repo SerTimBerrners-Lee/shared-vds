@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { dirname, homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as echarts from "echarts/core";
@@ -8,6 +15,7 @@ import { CanvasRenderer } from "echarts/renderers";
 import {
   ChevronDown,
   ChevronUp,
+  Check,
   CircleHelp,
   Copy,
   KeyRound,
@@ -32,9 +40,11 @@ import type {
   LocalTunnelSettings,
   ReverseTunnelSettings,
   ServerSessionSettings,
+  TerminalId,
 } from "../../../lib/store";
 import {
   generateSshKey,
+  getAvailableTerminals,
   isLocalSshUnavailableMessage,
   messageFromError,
   openLocalSshSettings,
@@ -43,6 +53,7 @@ import {
   readSshPublicKey,
   terminalFallbackCommandFromError,
   type DesktopPlatform,
+  type TerminalOption,
   testServerConnection,
   type SshKeyInfo,
   type SshConnectionTestResult,
@@ -69,6 +80,7 @@ const CONTROL_STYLE = {
 } as const;
 const CHART_AXIS_FONT_SIZE = 11;
 const CHART_VALUE_FONT_SIZE = 12;
+const VDS_HEALTH_RENDER_SAMPLE_LIMIT = 120;
 
 function asPort(value: string): number {
   const port = Number.parseInt(value, 10);
@@ -955,12 +967,19 @@ function UsageChartCard({
   );
 }
 
-function HealthHeatmap({ samples }: { samples: VdsHealthSample[] }): ReactElement {
+const HealthHeatmap = memo(function HealthHeatmap({
+  samples,
+}: {
+  samples: VdsHealthSample[];
+}): ReactElement {
   const { language, t } = useI18n();
-  const samplesByCell = samples.slice(-360);
-  const cells = Array.from(
-    { length: 360 },
-    (_, index) => samplesByCell[index] ?? null,
+  const cells = useMemo(
+    () =>
+      Array.from(
+        { length: VDS_HEALTH_RENDER_SAMPLE_LIMIT },
+        (_, index) => samples[index] ?? null,
+      ),
+    [samples],
   );
 
   return (
@@ -1001,7 +1020,7 @@ function HealthHeatmap({ samples }: { samples: VdsHealthSample[] }): ReactElemen
       </div>
     </div>
   );
-}
+});
 
 function VdsHealthBlock({
   status,
@@ -1032,6 +1051,10 @@ function VdsHealthBlock({
   const diskRatio = metricRatio(
     status?.metrics?.diskUsedBytes,
     status?.metrics?.diskTotalBytes,
+  );
+  const visibleHistory = useMemo(
+    () => history.slice(-VDS_HEALTH_RENDER_SAMPLE_LIMIT),
+    [history],
   );
 
   return (
@@ -1085,13 +1108,13 @@ function VdsHealthBlock({
               <span>{message}</span>
             </div>
           )}
-          <HealthHeatmap samples={history} />
+          <HealthHeatmap samples={visibleHistory} />
           <div className="vds-health-charts-grid">
             <CpuChartCard
               label={t("session.healthCpuLoad")}
               value={formatLoad(status)}
               ratio={loadRatio}
-              samples={history}
+              samples={visibleHistory}
             />
             <UsageChartCard
               label={t("session.healthRam")}
@@ -1302,6 +1325,7 @@ export function ProxyTab({
   profileId,
   config,
   settingsReady,
+  terminalPreference,
   localTunnelStatuses,
   reverseTunnelStatuses,
   localTunnelBusyId,
@@ -1313,6 +1337,7 @@ export function ProxyTab({
   vdsConnectionReady,
   onRefreshVdsHealth,
   onConfigChange,
+  onTerminalPreferenceChange,
   onStartLocalTunnel,
   onStopLocalTunnel,
   onStartReverseTunnel,
@@ -1322,6 +1347,7 @@ export function ProxyTab({
   profileId: string;
   config: ServerSessionSettings;
   settingsReady: boolean;
+  terminalPreference: TerminalId;
   localTunnelStatuses: Record<string, ServerSessionStatus>;
   reverseTunnelStatuses: Record<string, ServerSessionStatus>;
   localTunnelBusyId: string | null;
@@ -1333,6 +1359,7 @@ export function ProxyTab({
   vdsConnectionReady: boolean;
   onRefreshVdsHealth: () => void;
   onConfigChange: (patch: Partial<ServerSessionSettings>) => void;
+  onTerminalPreferenceChange: (terminalId: TerminalId) => void;
   onStartLocalTunnel: (tunnel: LocalTunnelSettings) => void;
   onStopLocalTunnel: (tunnelId: string) => void;
   onStartReverseTunnel: (tunnel: ReverseTunnelSettings) => void;
@@ -1347,6 +1374,11 @@ export function ProxyTab({
   const [sshKeyExpanded, setSshKeyExpanded] = useState(true);
   const [testBusy, setTestBusy] = useState(false);
   const [openServerBusy, setOpenServerBusy] = useState(false);
+  const [availableTerminals, setAvailableTerminals] = useState<
+    TerminalOption[]
+  >([]);
+  const [terminalsLoaded, setTerminalsLoaded] = useState(false);
+  const [terminalMenuOpen, setTerminalMenuOpen] = useState(false);
   const [remoteLoginSettingsBusy, setRemoteLoginSettingsBusy] = useState(false);
   const [terminalFallbackCommand, setTerminalFallbackCommand] = useState<
     string | null
@@ -1355,6 +1387,7 @@ export function ProxyTab({
     null,
   );
   const testedVdsConfigIdentities = useRef<Set<string>>(new Set());
+  const terminalMenuRef = useRef<HTMLDivElement>(null);
   const autoExpandedProfileId = useRef<string | null>(null);
   const previousVdsConfigTestIdentity = useRef<string | null>(null);
   const retestVdsOnFocusRef = useRef(false);
@@ -1405,6 +1438,18 @@ export function ProxyTab({
     vdsSystemStatus?.tools.sshKeygenAvailable === false
       ? t(missingSshKeygenKey(vdsSystemStatus.platform))
       : null;
+  const selectedTerminalId = useMemo<TerminalId>(() => {
+    if (
+      availableTerminals.some((terminal) => terminal.id === terminalPreference)
+    ) {
+      return terminalPreference;
+    }
+
+    return "system";
+  }, [availableTerminals, terminalPreference]);
+  const showTerminalMenu = availableTerminals.length > 1;
+  const terminalLabel = (terminal: TerminalOption): string =>
+    terminal.id === "system" ? t("session.terminalSystem") : terminal.label;
 
   const messageFromActionError = (error: unknown): string => {
     const fallbackCommand = terminalFallbackCommandFromError(error);
@@ -1423,6 +1468,83 @@ export function ProxyTab({
   ): void => {
     onConfigChange({ [field]: value } as Partial<ServerSessionSettings>);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getAvailableTerminals()
+      .then((terminals) => {
+        if (cancelled) {
+          return;
+        }
+
+        setAvailableTerminals(
+          terminals.length > 0
+            ? terminals
+            : [{ id: "system", label: "System default" }],
+        );
+        setTerminalsLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAvailableTerminals([{ id: "system", label: "System default" }]);
+          setTerminalsLoaded(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !terminalsLoaded ||
+      terminalPreference === "system" ||
+      availableTerminals.some((terminal) => terminal.id === terminalPreference)
+    ) {
+      return;
+    }
+
+    onTerminalPreferenceChange("system");
+  }, [
+    availableTerminals,
+    onTerminalPreferenceChange,
+    terminalPreference,
+    terminalsLoaded,
+  ]);
+
+  useEffect(() => {
+    if (!terminalMenuOpen) {
+      return;
+    }
+
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        terminalMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setTerminalMenuOpen(false);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setTerminalMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [terminalMenuOpen]);
 
   const updatePort = (
     field: NumericServerSessionField,
@@ -1706,6 +1828,7 @@ export function ProxyTab({
       await openServerKeyInstallTerminal({
         config,
         command: installPublicKeyCommand,
+        terminalId: selectedTerminalId,
       });
     } catch (error) {
       retestVdsOnFocusRef.current = false;
@@ -1718,7 +1841,7 @@ export function ProxyTab({
     setTerminalFallbackCommand(null);
 
     try {
-      await openLocalSshSettings();
+      await openLocalSshSettings(selectedTerminalId);
     } catch (error) {
       const message = messageFromActionError(error);
       setTestResult({
@@ -1750,7 +1873,7 @@ export function ProxyTab({
         return;
       }
 
-      await openServerTerminal(config);
+      await openServerTerminal(config, selectedTerminalId);
     } catch (error) {
       const message = messageFromActionError(error);
       setTestResult({
@@ -1949,23 +2072,90 @@ export function ProxyTab({
             )}
             <span>{t("session.testConnection")}</span>
           </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={openServerBusy || !serverTerminalReady}
-            onClick={() => {
-              void openServerSsh();
-            }}
-          >
-            {openServerBusy ? (
-              <Loader2 className="loading-soft-icon" size={15} />
-            ) : sshKeyInstallSuggested ? (
-              <KeyRound size={15} strokeWidth={2} />
-            ) : (
-              <SquareTerminal size={15} strokeWidth={2} />
-            )}
-            <span>{openServerActionLabel}</span>
-          </button>
+          {showTerminalMenu ? (
+            <div
+              className="server-session-terminal-split"
+              ref={terminalMenuRef}
+            >
+              <button
+                type="button"
+                className="btn server-session-terminal-main"
+                disabled={openServerBusy || !serverTerminalReady}
+                onClick={() => {
+                  void openServerSsh();
+                }}
+              >
+                {openServerBusy ? (
+                  <Loader2 className="loading-soft-icon" size={15} />
+                ) : sshKeyInstallSuggested ? (
+                  <KeyRound size={15} strokeWidth={2} />
+                ) : (
+                  <SquareTerminal size={15} strokeWidth={2} />
+                )}
+                <span>{openServerActionLabel}</span>
+              </button>
+              <button
+                type="button"
+                className="btn server-session-terminal-toggle"
+                aria-label={t("session.chooseTerminal")}
+                aria-haspopup="menu"
+                aria-expanded={terminalMenuOpen}
+                title={t("session.chooseTerminal")}
+                disabled={openServerBusy}
+                onClick={() => {
+                  setTerminalMenuOpen((open) => !open);
+                }}
+              >
+                <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />
+              </button>
+              {terminalMenuOpen && (
+                <div className="server-session-terminal-menu" role="menu">
+                  {availableTerminals.map((terminal) => {
+                    const selected = terminal.id === selectedTerminalId;
+
+                    return (
+                      <button
+                        key={terminal.id}
+                        type="button"
+                        className={`server-session-terminal-menu-item ${
+                          selected ? "is-selected" : ""
+                        }`}
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          onTerminalPreferenceChange(terminal.id);
+                          setTerminalMenuOpen(false);
+                        }}
+                      >
+                        <span>{terminalLabel(terminal)}</span>
+                        {selected && (
+                          <Check size={14} strokeWidth={2} aria-hidden="true" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled={openServerBusy || !serverTerminalReady}
+              onClick={() => {
+                void openServerSsh();
+              }}
+            >
+              {openServerBusy ? (
+                <Loader2 className="loading-soft-icon" size={15} />
+              ) : sshKeyInstallSuggested ? (
+                <KeyRound size={15} strokeWidth={2} />
+              ) : (
+                <SquareTerminal size={15} strokeWidth={2} />
+              )}
+              <span>{openServerActionLabel}</span>
+            </button>
+          )}
         </div>
 
         {testResult && (

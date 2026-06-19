@@ -3,6 +3,7 @@ import type {
   LocalTunnelSettings,
   ReverseTunnelSettings,
   ServerSessionSettings,
+  TerminalId,
 } from "./store";
 
 export type ServerSessionStatus = {
@@ -27,6 +28,11 @@ export type SshConnectionTestResult = {
 };
 
 export type DesktopPlatform = "macos" | "linux" | "windows" | "unknown";
+
+export type TerminalOption = {
+  id: TerminalId;
+  label: string;
+};
 
 export type SystemToolStatus = {
   sshAvailable: boolean;
@@ -83,6 +89,7 @@ export type VdsHealthSample = {
 };
 
 const TERMINAL_NOT_FOUND_PREFIX = "TERMINAL_NOT_FOUND:";
+let availableTerminalsPromise: Promise<TerminalOption[]> | null = null;
 
 export function isLocalSshUnavailableMessage(
   message: string | null | undefined,
@@ -122,6 +129,17 @@ export async function getVdsSystemStatus(
   return await invoke<VdsSystemStatus>("get_vds_system_status", {
     localSshPort,
   });
+}
+
+export async function getAvailableTerminals(): Promise<TerminalOption[]> {
+  availableTerminalsPromise ??= invoke<TerminalOption[]>(
+    "get_available_terminals",
+  ).catch((error) => {
+    availableTerminalsPromise = null;
+    throw error;
+  });
+
+  return await availableTerminalsPromise;
 }
 
 export async function getVdsHealth(
@@ -186,43 +204,55 @@ export async function requestRemoteLogin(
 
 export const requestLocalSshEnable = requestRemoteLogin;
 
-export async function openRemoteLoginSettings(): Promise<void> {
-  return await invoke<void>("open_remote_login_settings");
+export async function openRemoteLoginSettings(
+  terminalId?: TerminalId,
+): Promise<void> {
+  return await invoke<void>("open_remote_login_settings", {
+    terminalId,
+  });
 }
 
 export const openLocalSshSettings = openRemoteLoginSettings;
 
 export async function openServerTerminal(
   config: ServerSessionSettings,
+  terminalId?: TerminalId,
 ): Promise<void> {
   return await invoke<void>("open_server_terminal", {
     config,
+    terminalId,
   });
 }
 
 export async function openServerTerminalCommand({
   config,
   command,
+  terminalId,
 }: {
   config: ServerSessionSettings;
   command: string;
+  terminalId?: TerminalId;
 }): Promise<void> {
   return await invoke<void>("open_server_terminal_command", {
     config,
     command,
+    terminalId,
   });
 }
 
 export async function openServerKeyInstallTerminal({
   config,
   command,
+  terminalId,
 }: {
   config: ServerSessionSettings;
   command: string;
+  terminalId?: TerminalId;
 }): Promise<void> {
   return await invoke<void>("open_server_key_install_terminal", {
     config,
     command,
+    terminalId,
   });
 }
 
