@@ -144,6 +144,7 @@ jobs:
         env:
           BUILD_ROOT: release-artifacts
           SHARED_VDS_REQUIRED_UPDATER_PLATFORMS: darwin-aarch64,windows-x86_64,linux-x86_64
+          SHARED_VDS_SKIP_UPDATER_METADATA_IF_UNSIGNED: "1"
 
       - name: Prepare stable download assets
         run: |

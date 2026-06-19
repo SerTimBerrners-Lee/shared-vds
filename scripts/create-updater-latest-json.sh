@@ -8,10 +8,19 @@ REPOSITORY="${GITHUB_REPOSITORY:-SerTimBerrners-Lee/shared-vds}"
 BUILD_ROOT="${BUILD_ROOT:-src-tauri/target/release/bundle}"
 LATEST_JSON_PATH="${BUILD_ROOT}/latest.json"
 REQUIRED_PLATFORMS="${SHARED_VDS_REQUIRED_UPDATER_PLATFORMS:-}"
+SKIP_IF_UNSIGNED="${SHARED_VDS_SKIP_UPDATER_METADATA_IF_UNSIGNED:-0}"
 
 if [[ ! -d "${BUILD_ROOT}" ]]; then
   echo "Build root not found: ${BUILD_ROOT}" >&2
   exit 1
+fi
+
+if [[ "${SKIP_IF_UNSIGNED}" == "1" ]]; then
+  SIGNATURE_SAMPLE="$(find "${BUILD_ROOT}" -type f -name "*.sig" -print -quit)"
+  if [[ -z "${SIGNATURE_SAMPLE}" ]]; then
+    echo "No updater signatures found in ${BUILD_ROOT}; skipping latest.json."
+    exit 0
+  fi
 fi
 
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
