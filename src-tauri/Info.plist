@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Shared VDS</string>
+  <key>CFBundleDisplayName</key>
+  <string>Shared VDS</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.trixter.sharedvds</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>shared-vds</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

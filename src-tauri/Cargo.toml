@@ -1,0 +1,36 @@
+[package]
+name = "shared-vds"
+version = "0.9.0"
+description = "Shared VDS Desktop"
+authors = ["trixter"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+default-run = "shared-vds"
+
+[lib]
+name = "shared_vds_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "sync", "time"] }
+chrono = "0.4"
+dirs = "5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+toml_edit = "0.22"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-opener = "2.5.0"
+tauri-plugin-dialog = "2"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2.5.1"
+
+[dev-dependencies]
+tempfile = "3"

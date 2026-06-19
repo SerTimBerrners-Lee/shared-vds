@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Shared VDS",
+  "mainBinaryName": "Shared VDS",
+  "version": "0.9.0",
+  "identifier": "com.trixter.sharedvds",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun scripts/before-tauri-build.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyRUE3RkQwRjhFODM0QjMKUldTek5PajQwSC9xWXNVUjQ4T1U0RHNJVEhRUTJWNDFTYTJjNmg0eU5PMFdieDhnTHE3Z2EwN1YK",
+      "endpoints": [
+        "https://github.com/SerTimBerrners-Lee/shared-vds/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Removed
+- Removed legacy audio/transcription UI, floating widget, history, hotkey flow,
+  permission onboarding, file/call capture, local model runtimes and sidecars.
+- Removed cloud auth/device-token UI from the desktop shell.
+
+### Changed
+- Desktop app now starts as a minimal Tauri shell with local UI settings,
+  logging and updater wiring.
+- Release scripts no longer prepare STT/FFmpeg sidecars.
+
+### Added
+- `CHANGELOG.md` (this file)

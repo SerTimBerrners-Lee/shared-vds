@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to publish, for example v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-latest
+            release_script: build:release:macos
+            updater_platform: darwin-aarch64
+          - platform: windows
+            runner: windows-latest
+            release_script: build:release:windows
+            updater_platform: windows-x86_64
+          - platform: linux
+            runner: ubuntu-22.04
+            release_script: build:release:linux
+            updater_platform: linux-x86_64
+
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      TALKIS_STT_RELEASE: "1"
+      TALKIS_UPDATER_PLATFORM: ${{ matrix.updater_platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.13
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux Tauri dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            libasound2-dev \
+            libpipewire-0.3-dev \
+            librsvg2-dev \
+            patchelf \
+            clang \
+            libclang-dev \
+            cmake
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Cache Rust build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run release checks
+        run: |
+          bun run check:versions
+          bun run prepare:sidecars
+          bunx tsc --noEmit
+          cargo check --manifest-path src-tauri/Cargo.toml
+          bun run smoke:hotkey
+
+      - name: Build bundles
+        run: bun run ${{ matrix.release_script }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Archive macOS app bundle
+        if: matrix.platform == 'macos'
+        run: ditto -c -k --sequesterRsrc --keepParent "src-tauri/target/release/bundle/macos/Shared VDS.app" "Shared-VDS-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-macos.zip"
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-vds-${{ matrix.platform }}-release
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/bundle/rpm/*.rpm
+            Shared-VDS-*-macos.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create updater metadata
+        run: bash scripts/create-updater-latest-json.sh "${RELEASE_TAG#v}" "${RELEASE_TAG}"
+        env:
+          BUILD_ROOT: release-artifacts
+          SHARED_VDS_REQUIRED_UPDATER_PLATFORMS: darwin-aarch64,windows-x86_64,linux-x86_64
+
+      - name: Prepare stable download assets
+        run: |
+          set -euo pipefail
+
+          STABLE_DIR="release-artifacts/stable-downloads"
+          mkdir -p "$STABLE_DIR"
+
+          copy_first() {
+            local pattern="$1"
+            local target="$2"
+            local source
+
+            source="$(find release-artifacts -type f -name "$pattern" ! -path "$STABLE_DIR/*" -print -quit)"
+            if [[ -z "$source" ]]; then
+              echo "Missing release asset matching $pattern" >&2
+              exit 1
+            fi
+
+            cp "$source" "$STABLE_DIR/$target"
+            echo "Prepared $target from $source"
+          }
+
+          copy_first "*.dmg" "Shared-VDS-macos.dmg"
+          copy_first "*.exe" "Shared-VDS-windows-x64-setup.exe"
+          copy_first "*.AppImage" "Shared-VDS-linux-x64.AppImage"
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Shared VDS ${{ env.RELEASE_TAG }}
+          body: |
+            Automated release for ${{ env.RELEASE_TAG }}.
+
+            This release publishes native Tauri bundles built on macOS, Windows, and Linux runners.
+            Windows/Linux builds are unsigned in this workflow.
+          draft: false
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          files: |
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.app.tar.gz
+            release-artifacts/**/*.exe
+            release-artifacts/**/*.msi
+            release-artifacts/**/*.AppImage
+            release-artifacts/**/*.deb
+            release-artifacts/**/*.rpm
+            release-artifacts/**/*.zip
+            release-artifacts/**/*.sig
+            release-artifacts/**/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

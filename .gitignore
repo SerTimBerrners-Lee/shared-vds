@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+._*
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Local-only Cargo config (contains absolute target-dir for external drive)
+.cargo/config.toml
+
+# Local agent/prototype artifacts not published with the desktop source repo
+.agent/
+.nanocoder/
+site/
+skills/
+rules/style.rule.md
+docs/demo/*.gif
+docs/release/review-v*.md

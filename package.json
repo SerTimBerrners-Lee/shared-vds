@@ -1,0 +1,48 @@
+{
+  "name": "shared-vds",
+  "private": true,
+  "version": "0.9.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "packageManager": "bun@1.2.13",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "check": "bunx tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "bun test",
+    "check:versions": "bash scripts/check-version-sync.sh",
+    "check:release": "bun run check:versions && bun run check && bun run build",
+    "postprocess:macos-release": "VERSION=$(python3 -c \"import json; print(json.load(open('package.json'))['version'])\") && BUILD_ROOT=src-tauri/target/release/bundle bash scripts/postprocess-macos-release.sh \"$VERSION\"",
+    "build:release": "bun scripts/build-release.mjs",
+    "build:release:macos": "bun scripts/build-release.mjs macos",
+    "build:release:windows": "bun scripts/build-release.mjs windows",
+    "build:release:linux": "bun scripts/build-release.mjs linux",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "logs": "tail -f ~/.shared-vds/shared-vds.log",
+    "logs:clear": "rm -f ~/.shared-vds/shared-vds.log"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-store": "^2.4.2",
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "echarts": "^6.1.0",
+    "lucide-react": "^0.577.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.2.1",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}
