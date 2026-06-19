@@ -35,6 +35,14 @@ export async function getLogPath(): Promise<string> {
   }
 }
 
+export async function openLogFile(): Promise<void> {
+  await invoke("open_log_file_cmd");
+}
+
+export async function revealLogFile(): Promise<void> {
+  await invoke("reveal_log_file_cmd");
+}
+
 export async function clearLogs(): Promise<void> {
   try {
     await invoke("clear_logs");

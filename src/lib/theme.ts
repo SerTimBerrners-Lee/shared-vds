@@ -3,6 +3,8 @@ import { getSettings, type ThemePreference } from "./store";
 export type EffectiveTheme = "light" | "dark";
 
 const THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
+export const THEME_PREFERENCE_STORAGE_KEY = "shared-vds-theme-preference";
+const COLOR_SCHEME_META_SELECTOR = 'meta[name="color-scheme"]';
 
 function getSystemTheme(): EffectiveTheme {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -16,12 +18,39 @@ export function resolveEffectiveTheme(preference: ThemePreference): EffectiveThe
   return preference === "system" ? getSystemTheme() : preference;
 }
 
+function persistThemePreference(preference: ThemePreference): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, preference);
+  } catch {
+    // localStorage is only a startup hint; Tauri store remains authoritative.
+  }
+}
+
+function updateColorSchemeMeta(theme: EffectiveTheme): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const colorSchemeMeta = document.querySelector(COLOR_SCHEME_META_SELECTOR);
+
+  if (colorSchemeMeta) {
+    colorSchemeMeta.setAttribute("content", theme);
+  }
+}
+
 export function applyThemePreference(preference: ThemePreference): EffectiveTheme {
   const effectiveTheme = resolveEffectiveTheme(preference);
+
+  persistThemePreference(preference);
 
   if (typeof document !== "undefined") {
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
+    updateColorSchemeMeta(effectiveTheme);
   }
 
   return effectiveTheme;
@@ -54,6 +83,6 @@ export async function applySavedTheme(): Promise<EffectiveTheme> {
     const settings = await getSettings({ reload: true });
     return applyThemePreference(settings.theme);
   } catch {
-    return applyThemePreference("system");
+    return applyThemePreference("light");
   }
 }

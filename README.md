@@ -17,7 +17,8 @@ updater wiring, and a minimal reverse SSH tunnel manager for a user-prepared VDS
 - Current desktop flow is a server session helper: the user prepares the VDS,
   and the app can start/stop a local `ssh -N -R` reverse tunnel back to the
   user's local SSH.
-- Release artifacts пока не считаются production-ready.
+- Stable release artifacts are published by GitHub Actions for macOS, Windows,
+  and Linux.
 
 ## Роль в системе
 
@@ -93,6 +94,8 @@ bun run check:versions
 ```bash
 bun run tauri build
 bun run build:release:macos
+bun run build:release:windows
+bun run build:release:linux
 ```
 
 Логи разработки:

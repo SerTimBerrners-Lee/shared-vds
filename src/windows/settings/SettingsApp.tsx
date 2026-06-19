@@ -82,6 +82,7 @@ type AppNotification = {
   message: string;
 };
 const APP_VERSION = appPackage.version;
+const APP_REPOSITORY_URL = "https://github.com/SerTimBerrners-Lee/shared-vds";
 const VDS_REFERRAL_URL = "https://rdp-onedash.ru/r/a49cd94";
 const APP_LAUNCH_COUNT_SESSION_KEY = "shared-vds-app-launch-counted";
 const VDS_REFERRAL_MIN_LAUNCH_COUNT = 3;
@@ -751,6 +752,7 @@ function VdsSidebar({
   showReferral,
   onOpenReferral,
   onDismissReferral,
+  onOpenRepository,
   onError,
 }: {
   profiles: ServerSessionProfile[];
@@ -768,14 +770,17 @@ function VdsSidebar({
   showReferral: boolean;
   onOpenReferral: () => void;
   onDismissReferral?: () => void;
+  onOpenRepository: () => void;
   onError: (message: string) => void;
 }): ReactElement {
   const t = useT();
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [editingProfileNameDraft, setEditingProfileNameDraft] = useState("");
   const [openActionsProfileId, setOpenActionsProfileId] = useState<
     string | null
   >(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
+  const skipNextProfileRenameRef = useRef(false);
   const actionsContainerRef = useRef<HTMLDivElement | null>(null);
   const pinnedProfileIdSet = new Set(pinnedProfileIds);
   const orderedProfiles = [
@@ -792,6 +797,35 @@ function VdsSidebar({
     input?.focus();
     input?.select();
   }, [editingProfileId]);
+
+  const beginEditingProfile = (profile: ServerSessionProfile): void => {
+    skipNextProfileRenameRef.current = false;
+    setOpenActionsProfileId(null);
+    setEditingProfileId(profile.id);
+    setEditingProfileNameDraft(profile.name);
+  };
+
+  const finishEditingProfile = (profile: ServerSessionProfile): void => {
+    if (skipNextProfileRenameRef.current) {
+      skipNextProfileRenameRef.current = false;
+      setEditingProfileId((current) =>
+        current === profile.id ? null : current,
+      );
+      setEditingProfileNameDraft("");
+      return;
+    }
+
+    const nextName = editingProfileNameDraft.trim().slice(0, 80);
+
+    setEditingProfileId((current) =>
+      current === profile.id ? null : current,
+    );
+    setEditingProfileNameDraft("");
+
+    if (nextName && nextName !== profile.name) {
+      onRename(profile.id, editingProfileNameDraft);
+    }
+  };
 
   useEffect(() => {
     if (
@@ -878,8 +912,7 @@ function VdsSidebar({
                 }}
                 onDoubleClick={(event) => {
                   event.preventDefault();
-                  setOpenActionsProfileId(null);
-                  setEditingProfileId(profile.id);
+                  beginEditingProfile(profile);
                 }}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) {
@@ -898,7 +931,9 @@ function VdsSidebar({
                     ref={editInputRef}
                     className="vds-profile-name-input is-editing"
                     type="text"
-                    value={profile.name}
+                    value={editingProfileNameDraft}
+                    maxLength={80}
+                    spellCheck={false}
                     aria-label={`${t("session.vdsSidebarTitle")}: ${profile.name}`}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -906,18 +941,23 @@ function VdsSidebar({
                     onDoubleClick={(event) => {
                       event.stopPropagation();
                     }}
-                    onChange={(event) =>
-                      onRename(profile.id, event.currentTarget.value)
-                    }
+                    onChange={(event) => {
+                      setEditingProfileNameDraft(event.currentTarget.value);
+                    }}
                     onBlur={() => {
-                      setEditingProfileId((current) =>
-                        current === profile.id ? null : current,
-                      );
+                      finishEditingProfile(profile);
                     }}
                     onKeyDown={(event) => {
                       event.stopPropagation();
 
-                      if (event.key === "Enter" || event.key === "Escape") {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      }
+
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        skipNextProfileRenameRef.current = true;
                         event.currentTarget.blur();
                       }
                     }}
@@ -995,8 +1035,7 @@ function VdsSidebar({
                         className="btn vds-profile-action-item"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setOpenActionsProfileId(null);
-                          setEditingProfileId(profile.id);
+                          beginEditingProfile(profile);
                         }}
                       >
                         <Pencil size={13} strokeWidth={2} aria-hidden="true" />
@@ -1064,12 +1103,16 @@ function VdsSidebar({
               />
             </button>
           </div>
-          <div
+          <button
+            type="button"
             className="settings-sidebar-version"
-            title={`Shared VDS ${APP_VERSION}`}
+            title={`Shared VDS ${APP_VERSION} - GitHub`}
+            aria-label={`Shared VDS ${APP_VERSION} - GitHub`}
+            onClick={onOpenRepository}
           >
-            v{APP_VERSION}
-          </div>
+            <span>v{APP_VERSION}</span>
+            <ExternalLink size={10} strokeWidth={2} aria-hidden="true" />
+          </button>
         </div>
       </div>
       <div className="settings-sidebar-bottom">
@@ -1287,8 +1330,12 @@ export function SettingsApp(): ReactElement {
   }, []);
 
   useEffect(() => {
+    if (!settingsReady) {
+      return undefined;
+    }
+
     return watchThemePreference(themePreference);
-  }, [themePreference]);
+  }, [settingsReady, themePreference]);
 
   useEffect(() => {
     if (
@@ -1859,6 +1906,20 @@ export function SettingsApp(): ReactElement {
     }
   };
 
+  const openAppRepository = async (): Promise<void> => {
+    try {
+      await openUrl(APP_REPOSITORY_URL);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      showErrorNotification(t("app.repositoryOpenError"));
+      void logError(
+        "SETTINGS_APP",
+        `Failed to open Shared VDS GitHub URL: ${message}`,
+      );
+    }
+  };
+
   const addServerSessionProfile = async (): Promise<void> => {
     const nextProfile = createServerSessionProfile(
       appSettings.serverSessionProfiles.length + 1,
@@ -2161,6 +2222,9 @@ export function SettingsApp(): ReactElement {
             showReferral={showVdsReferral}
             onOpenReferral={() => {
               void openVdsReferral();
+            }}
+            onOpenRepository={() => {
+              void openAppRepository();
             }}
             onDismissReferral={
               import.meta.env.DEV

@@ -37,9 +37,9 @@ This file defines the release workflow for Shared VDS.
 
 - Working tree is clean and the release branch diff is intentional.
 - README reflects the current product behavior and release process.
-- Desktop auth, connector/cloud state, transcription flow and local runtime
-  controls are still coherent.
-- Short or noisy recordings do not paste obvious hallucinated text.
+- Server-session, VDS profile, reverse tunnel, settings, logging and updater
+  surfaces are still coherent.
+- Legacy audio/STT/sidecar/hotkey surfaces are not reintroduced.
 - `bun run check:release` passes.
 - Local production build passes via `bun run build:release:macos`; Windows and
   Linux production builds pass on native runners or in GitHub Actions.

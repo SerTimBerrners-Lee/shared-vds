@@ -36,7 +36,6 @@ jobs:
 
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
-      TALKIS_STT_RELEASE: "1"
       TALKIS_UPDATER_PLATFORM: ${{ matrix.updater_platform }}
 
     steps:
@@ -92,10 +91,8 @@ jobs:
       - name: Run release checks
         run: |
           bun run check:versions
-          bun run prepare:sidecars
           bunx tsc --noEmit
           cargo check --manifest-path src-tauri/Cargo.toml
-          bun run smoke:hotkey
 
       - name: Build bundles
         run: bun run ${{ matrix.release_script }}

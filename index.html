@@ -2,7 +2,41 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (() => {
+        const storageKey = "shared-vds-theme-preference";
+        let preference = null;
+
+        try {
+          preference = window.localStorage.getItem(storageKey);
+        } catch {
+          preference = null;
+        }
+
+        const systemPrefersDark =
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const theme =
+          preference === "dark" ||
+          (preference === "system" && systemPrefersDark)
+            ? "dark"
+            : "light";
+        const root = document.documentElement;
+
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme;
+
+        const colorSchemeMeta = document.querySelector(
+          'meta[name="color-scheme"]',
+        );
+
+        if (colorSchemeMeta) {
+          colorSchemeMeta.setAttribute("content", theme);
+        }
+      })();
+    </script>
     <title>Shared VDS</title>
   </head>
   <body>

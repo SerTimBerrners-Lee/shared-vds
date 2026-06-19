@@ -51,6 +51,8 @@ pub fn run() {
             commands::server_session::stop_server_session_tunnel,
             logger::log_event,
             logger::get_log_path_cmd,
+            logger::open_log_file_cmd,
+            logger::reveal_log_file_cmd,
             logger::clear_logs,
         ])
         .run(tauri::generate_context!())

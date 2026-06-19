@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="surface" x1="178" y1="118" x2="846" y2="906" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171717"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="tunnel" x1="296" y1="676" x2="706" y2="342" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAFDF9"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#surface)"/>
+  <path
+    d="M 300 680 C 390 536 526 514 640 420 C 688 381 721 340 748 292"
+    stroke="url(#tunnel)"
+    stroke-width="122"
+    stroke-linecap="round"
+  />
+  <circle cx="746" cy="294" r="86" fill="#58D3CF"/>
+  <circle cx="746" cy="294" r="31" fill="#050505"/>
+</svg>

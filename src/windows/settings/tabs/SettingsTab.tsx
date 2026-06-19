@@ -5,7 +5,14 @@ import {
   isEnabled as isAutostartEnabled,
 } from "@tauri-apps/plugin-autostart";
 import { emit } from "@tauri-apps/api/event";
-import { Monitor, Moon, Sun, type LucideIcon } from "lucide-react";
+import {
+  FileText,
+  FolderOpen,
+  Monitor,
+  Moon,
+  Sun,
+  type LucideIcon,
+} from "lucide-react";
 
 import {
   getSettings,
@@ -26,11 +33,18 @@ import {
   type TranslationKey,
 } from "../../../lib/i18n";
 import { SETTINGS_UPDATED_EVENT } from "../../../lib/settingsEvents";
-import { logError, logInfo } from "../../../lib/logger";
+import {
+  getLogPath,
+  logError,
+  logInfo,
+  openLogFile,
+  revealLogFile,
+} from "../../../lib/logger";
 
 const CONTROL_HEIGHT = 38;
 const CONTROL_RADIUS = 8;
 const CONTROL_FONT_SIZE = "var(--text-sm)";
+const DEFAULT_LOG_PATH = "~/.shared-vds/shared-vds.log";
 const SETTINGS_CARD_STYLE = {
   display: "grid",
   gap: 12,
@@ -61,6 +75,17 @@ const STATS_REFRESH_OPTIONS: Array<{
   { value: 600000, labelKey: "settings.statsRefresh10m" },
 ];
 
+type SettingsSection = "general" | "logs";
+type LogAction = "open" | "reveal";
+
+const SETTINGS_SECTIONS: Array<{
+  id: SettingsSection;
+  labelKey: TranslationKey;
+}> = [
+  { id: "general", labelKey: "settings.generalTab" },
+  { id: "logs", labelKey: "settings.logsTab" },
+];
+
 export function SettingsTab() {
   const locale = useAppLocale();
   const t = (
@@ -71,6 +96,13 @@ export function SettingsTab() {
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [autostartLoaded, setAutostartLoaded] = useState(false);
   const [autostartPending, setAutostartPending] = useState(false);
+  const [activeSection, setActiveSection] =
+    useState<SettingsSection>("general");
+  const [logPath, setLogPath] = useState(DEFAULT_LOG_PATH);
+  const [logActionPending, setLogActionPending] = useState<LogAction | null>(
+    null,
+  );
+  const [logActionError, setLogActionError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -121,6 +153,29 @@ export function SettingsTab() {
     };
 
     void loadAutostartState();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    getLogPath()
+      .then((path) => {
+        if (!mounted) {
+          return;
+        }
+
+        setLogPath(path || DEFAULT_LOG_PATH);
+      })
+      .catch((error) => {
+        void logError(
+          "SETTINGS",
+          `Failed to load log path: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
 
     return () => {
       mounted = false;
@@ -204,6 +259,34 @@ export function SettingsTab() {
     }
   };
 
+  const runLogAction = async (action: LogAction): Promise<void> => {
+    if (logActionPending) {
+      return;
+    }
+
+    const errorMessage =
+      action === "open"
+        ? t("settings.logsOpenFileError")
+        : t("settings.logsRevealFileError");
+
+    setLogActionError(null);
+    setLogActionPending(action);
+
+    try {
+      if (action === "open") {
+        await openLogFile();
+      } else {
+        await revealLogFile();
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setLogActionError(errorMessage);
+      void logError("SETTINGS", `${errorMessage}: ${detail}`);
+    } finally {
+      setLogActionPending(null);
+    }
+  };
+
   if (!settings) {
     return null;
   }
@@ -211,7 +294,57 @@ export function SettingsTab() {
   const autostartDisabled = !autostartLoaded || autostartPending;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div className="card" style={SETTINGS_CARD_STYLE}>
+      <div
+        role="tablist"
+        aria-label={t("nav.settings")}
+        style={{
+          display: "flex",
+          background: "var(--control-track)",
+          borderRadius: 10,
+          padding: 3,
+          gap: 2,
+          width: "100%",
+        }}
+      >
+        {SETTINGS_SECTIONS.map(({ id, labelKey }) => {
+          const active = activeSection === id;
+
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => {
+                setActiveSection(id);
+                setLogActionError(null);
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: CONTROL_HEIGHT - 6,
+                padding: "0 8px",
+                borderRadius: CONTROL_RADIUS,
+                border: "none",
+                fontSize: CONTROL_FONT_SIZE,
+                fontWeight: active
+                  ? "var(--weight-bold)"
+                  : "var(--weight-medium)",
+                background: active ? "var(--dropdown-active)" : "transparent",
+                color: active ? "var(--text-hi)" : "var(--text-mid)",
+                cursor: "pointer",
+                transition: "background 0.15s ease, color 0.15s ease",
+              }}
+            >
+              {t(labelKey)}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeSection === "general" && (
+        <>
+          <div className="card" style={SETTINGS_CARD_STYLE}>
         <div
           style={{
             fontSize: "var(--text-lg)",
@@ -455,6 +588,146 @@ export function SettingsTab() {
           </span>
         </button>
       </div>
+        </>
+      )}
+
+      {activeSection === "logs" && (
+        <div className="card" style={{ ...SETTINGS_CARD_STYLE, gap: 14 }}>
+          <div style={{ display: "grid", gap: 6 }}>
+            <div
+              style={{
+                fontSize: "var(--text-lg)",
+                fontWeight: "var(--weight-bold)",
+                color: "var(--text-hi)",
+                margin: 0,
+              }}
+            >
+              {t("settings.logsPathLabel")}
+            </div>
+            <div
+              style={{
+                color: "var(--text-mid)",
+                fontSize: "var(--text-sm)",
+                fontWeight: "var(--weight-medium)",
+                lineHeight: 1.45,
+              }}
+            >
+              {t("settings.logsPathDescription")}
+            </div>
+          </div>
+
+          <div
+            aria-label={t("settings.logsPathLabel")}
+            style={{
+              minHeight: CONTROL_HEIGHT,
+              padding: "9px 10px",
+              border: "1px solid var(--border)",
+              borderRadius: CONTROL_RADIUS,
+              background: "var(--control-bg)",
+              color: "var(--text-hi)",
+              fontSize: CONTROL_FONT_SIZE,
+              fontWeight: "var(--weight-medium)",
+              lineHeight: 1.35,
+              overflowWrap: "anywhere",
+              userSelect: "text",
+            }}
+          >
+            {logPath}
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={logActionPending !== null}
+              onClick={() => {
+                void runLogAction("open");
+              }}
+              style={{
+                flex: "1 1 150px",
+                minHeight: CONTROL_HEIGHT,
+                padding: "0 10px",
+                borderRadius: CONTROL_RADIUS,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                opacity: logActionPending !== null ? 0.72 : 1,
+                cursor: logActionPending !== null ? "wait" : "pointer",
+                transform: "none",
+              }}
+            >
+              <FileText size={15} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("settings.logsOpenFile")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="btn"
+              disabled={logActionPending !== null}
+              onClick={() => {
+                void runLogAction("reveal");
+              }}
+              style={{
+                flex: "1 1 150px",
+                minHeight: CONTROL_HEIGHT,
+                padding: "0 10px",
+                borderRadius: CONTROL_RADIUS,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                opacity: logActionPending !== null ? 0.72 : 1,
+                cursor: logActionPending !== null ? "wait" : "pointer",
+                transform: "none",
+              }}
+            >
+              <FolderOpen
+                size={15}
+                strokeWidth={2}
+                style={{ flexShrink: 0 }}
+              />
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("settings.logsRevealFile")}
+              </span>
+            </button>
+          </div>
+
+          {logActionError && (
+            <div
+              role="status"
+              style={{
+                padding: "9px 10px",
+                border: "1px solid color-mix(in srgb, var(--danger) 24%, var(--border))",
+                borderRadius: CONTROL_RADIUS,
+                background: "var(--surface-hi)",
+                color: "var(--danger)",
+                fontSize: "var(--text-sm)",
+                fontWeight: "var(--weight-semibold)",
+                lineHeight: 1.4,
+              }}
+            >
+              {logActionError}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
