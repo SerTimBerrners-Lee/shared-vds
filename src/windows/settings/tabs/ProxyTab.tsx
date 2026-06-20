@@ -80,7 +80,8 @@ const CONTROL_STYLE = {
 } as const;
 const CHART_AXIS_FONT_SIZE = 11;
 const CHART_VALUE_FONT_SIZE = 12;
-const VDS_HEALTH_RENDER_SAMPLE_LIMIT = 120;
+const VDS_HEALTH_CHART_SAMPLE_LIMIT = 120;
+const VDS_HEALTH_HEATMAP_CELL_COUNT = 360;
 
 function asPort(value: string): number {
   const port = Number.parseInt(value, 10);
@@ -974,11 +975,14 @@ const HealthHeatmap = memo(function HealthHeatmap({
 }): ReactElement {
   const { language, t } = useI18n();
   const cells = useMemo(
-    () =>
-      Array.from(
-        { length: VDS_HEALTH_RENDER_SAMPLE_LIMIT },
-        (_, index) => samples[index] ?? null,
-      ),
+    () => {
+      const samplesByCell = samples.slice(-VDS_HEALTH_HEATMAP_CELL_COUNT);
+
+      return Array.from(
+        { length: VDS_HEALTH_HEATMAP_CELL_COUNT },
+        (_, index) => samplesByCell[index] ?? null,
+      );
+    },
     [samples],
   );
 
@@ -1052,8 +1056,12 @@ function VdsHealthBlock({
     status?.metrics?.diskUsedBytes,
     status?.metrics?.diskTotalBytes,
   );
-  const visibleHistory = useMemo(
-    () => history.slice(-VDS_HEALTH_RENDER_SAMPLE_LIMIT),
+  const chartHistory = useMemo(
+    () => history.slice(-VDS_HEALTH_CHART_SAMPLE_LIMIT),
+    [history],
+  );
+  const heatmapHistory = useMemo(
+    () => history.slice(-VDS_HEALTH_HEATMAP_CELL_COUNT),
     [history],
   );
 
@@ -1108,13 +1116,13 @@ function VdsHealthBlock({
               <span>{message}</span>
             </div>
           )}
-          <HealthHeatmap samples={visibleHistory} />
+          <HealthHeatmap samples={heatmapHistory} />
           <div className="vds-health-charts-grid">
             <CpuChartCard
               label={t("session.healthCpuLoad")}
               value={formatLoad(status)}
               ratio={loadRatio}
-              samples={visibleHistory}
+              samples={chartHistory}
             />
             <UsageChartCard
               label={t("session.healthRam")}

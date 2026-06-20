@@ -39,6 +39,7 @@ pub fn run() {
             commands::server_session::read_ssh_public_key,
             commands::server_session::test_server_connection,
             commands::server_session::check_local_ssh_access,
+            commands::server_session::get_available_terminals,
             commands::server_session::open_remote_login_settings,
             commands::server_session::request_remote_login,
             commands::server_session::open_server_terminal,

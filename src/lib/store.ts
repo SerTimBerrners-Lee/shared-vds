@@ -8,6 +8,16 @@ import type {
 
 export type ThemePreference = "system" | "light" | "dark";
 export type InterfaceLanguage = "ru" | "en";
+export type TerminalId =
+  | "system"
+  | "terminal"
+  | "windows-terminal"
+  | "powershell"
+  | "x-terminal-emulator"
+  | "gnome-terminal"
+  | "konsole"
+  | "xfce4-terminal"
+  | "xterm";
 export type VdsHealthPollIntervalMs =
   | 5000
   | 10000
@@ -84,6 +94,7 @@ export interface ServerSessionProfile {
 export interface AppSettings {
   theme: ThemePreference;
   interfaceLanguage: InterfaceLanguage;
+  terminalPreference: TerminalId;
   vdsHealthPollIntervalMs: VdsHealthPollIntervalMs;
   serverSession: ServerSessionSettings;
   serverSessionProfiles: ServerSessionProfile[];
@@ -133,6 +144,7 @@ export const DEFAULT_SERVER_SESSION_PROFILES: ServerSessionProfile[] = [
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
   interfaceLanguage: "ru",
+  terminalPreference: "system",
   vdsHealthPollIntervalMs: DEFAULT_VDS_HEALTH_POLL_INTERVAL_MS,
   serverSession: DEFAULT_SERVER_SESSION_SETTINGS,
   serverSessionProfiles: DEFAULT_SERVER_SESSION_PROFILES,
@@ -157,6 +169,24 @@ function parseTheme(value: unknown): ThemePreference | undefined {
 
 function parseInterfaceLanguage(value: unknown): InterfaceLanguage | undefined {
   if (value === "ru" || value === "en") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function parseTerminalPreference(value: unknown): TerminalId | undefined {
+  if (
+    value === "system" ||
+    value === "terminal" ||
+    value === "windows-terminal" ||
+    value === "powershell" ||
+    value === "x-terminal-emulator" ||
+    value === "gnome-terminal" ||
+    value === "konsole" ||
+    value === "xfce4-terminal" ||
+    value === "xterm"
+  ) {
     return value;
   }
 
@@ -632,6 +662,7 @@ function normalizeSavedSettings(saved: unknown): Partial<AppSettings> {
   return {
     theme: parseTheme(raw.theme),
     interfaceLanguage: parseInterfaceLanguage(raw.interfaceLanguage),
+    terminalPreference: parseTerminalPreference(raw.terminalPreference),
     vdsHealthPollIntervalMs: parseVdsHealthPollInterval(
       raw.vdsHealthPollIntervalMs,
     ),

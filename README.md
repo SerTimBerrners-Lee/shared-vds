@@ -149,6 +149,4 @@ git push -u origin main
 
 ## License
 
-Shared VDS is licensed under the
-[GNU Affero General Public License v3.0 or later](LICENSE)
-(`AGPL-3.0-or-later`).
+Shared VDS is licensed under the [MIT License](LICENSE) (`MIT`).

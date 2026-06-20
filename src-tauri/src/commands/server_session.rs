@@ -116,6 +116,27 @@ pub enum DesktopPlatform {
     Unknown,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalId {
+    System,
+    Terminal,
+    WindowsTerminal,
+    Powershell,
+    XTerminalEmulator,
+    GnomeTerminal,
+    Konsole,
+    Xfce4Terminal,
+    Xterm,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOption {
+    id: TerminalId,
+    label: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemToolStatus {
@@ -1606,6 +1627,7 @@ const TERMINAL_NOT_FOUND_PREFIX: &str = "TERMINAL_NOT_FOUND:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalLaunch {
+    id: TerminalId,
     program: String,
     args: Vec<String>,
     wait_for_exit: bool,
@@ -1619,6 +1641,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 applescript_quote(command)
             );
             vec![TerminalLaunch {
+                id: TerminalId::Terminal,
                 program: "osascript".to_string(),
                 args: vec![
                     "-e".to_string(),
@@ -1631,6 +1654,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
         }
         DesktopPlatform::Windows => vec![
             TerminalLaunch {
+                id: TerminalId::WindowsTerminal,
                 program: "wt.exe".to_string(),
                 args: vec![
                     "powershell.exe".to_string(),
@@ -1641,6 +1665,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
             TerminalLaunch {
+                id: TerminalId::Powershell,
                 program: "powershell.exe".to_string(),
                 args: vec![
                     "-NoExit".to_string(),
@@ -1652,6 +1677,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
         ],
         DesktopPlatform::Linux | DesktopPlatform::Unknown => vec![
             TerminalLaunch {
+                id: TerminalId::XTerminalEmulator,
                 program: "x-terminal-emulator".to_string(),
                 args: vec![
                     "-e".to_string(),
@@ -1662,6 +1688,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
             TerminalLaunch {
+                id: TerminalId::GnomeTerminal,
                 program: "gnome-terminal".to_string(),
                 args: vec![
                     "--".to_string(),
@@ -1672,6 +1699,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
             TerminalLaunch {
+                id: TerminalId::Konsole,
                 program: "konsole".to_string(),
                 args: vec![
                     "-e".to_string(),
@@ -1682,6 +1710,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
             TerminalLaunch {
+                id: TerminalId::Xfce4Terminal,
                 program: "xfce4-terminal".to_string(),
                 args: vec![
                     "--command".to_string(),
@@ -1690,6 +1719,7 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
             TerminalLaunch {
+                id: TerminalId::Xterm,
                 program: "xterm".to_string(),
                 args: vec![
                     "-e".to_string(),
@@ -1700,6 +1730,46 @@ fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<T
                 wait_for_exit: false,
             },
         ],
+    }
+}
+
+fn terminal_option_label(id: TerminalId) -> &'static str {
+    match id {
+        TerminalId::System => "System default",
+        TerminalId::Terminal => "Terminal",
+        TerminalId::WindowsTerminal => "Windows Terminal",
+        TerminalId::Powershell => "PowerShell",
+        TerminalId::XTerminalEmulator => "System terminal",
+        TerminalId::GnomeTerminal => "GNOME Terminal",
+        TerminalId::Konsole => "Konsole",
+        TerminalId::Xfce4Terminal => "Xfce Terminal",
+        TerminalId::Xterm => "xterm",
+    }
+}
+
+fn terminal_launch_candidates_for_selection(
+    platform: DesktopPlatform,
+    command: &str,
+    terminal_id: Option<TerminalId>,
+) -> Vec<TerminalLaunch> {
+    let candidates = terminal_launch_candidates(platform, command);
+
+    match terminal_id {
+        Some(id) if id != TerminalId::System => {
+            let mut selected = candidates
+                .iter()
+                .filter(|candidate| candidate.id == id)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            selected.extend(
+                candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.id != id),
+            );
+            selected
+        }
+        _ => candidates,
     }
 }
 
@@ -1746,8 +1816,12 @@ fn run_terminal_launch(candidate: &TerminalLaunch) -> Result<(), String> {
     }
 }
 
-fn open_terminal_with_command(command: &str) -> Result<(), String> {
-    let candidates = terminal_launch_candidates(current_platform(), command);
+fn open_terminal_with_command(
+    command: &str,
+    terminal_id: Option<TerminalId>,
+) -> Result<(), String> {
+    let candidates =
+        terminal_launch_candidates_for_selection(current_platform(), command, terminal_id);
     let mut last_error: Option<String> = None;
 
     for candidate in candidates {
@@ -1762,6 +1836,30 @@ fn open_terminal_with_command(command: &str) -> Result<(), String> {
     }
 
     Err(last_error.unwrap_or_else(|| terminal_not_found_error(command)))
+}
+
+#[tauri::command]
+pub fn get_available_terminals() -> Vec<TerminalOption> {
+    let platform = current_platform();
+    let mut terminals = vec![TerminalOption {
+        id: TerminalId::System,
+        label: terminal_option_label(TerminalId::System).to_string(),
+    }];
+
+    for candidate in terminal_launch_candidates(platform, "true") {
+        if !system_tool_available(&candidate.program)
+            || terminals.iter().any(|terminal| terminal.id == candidate.id)
+        {
+            continue;
+        }
+
+        terminals.push(TerminalOption {
+            id: candidate.id,
+            label: terminal_option_label(candidate.id).to_string(),
+        });
+    }
+
+    terminals
 }
 
 fn local_ssh_support(local_ssh_port: u16) -> LocalSshSupport {
@@ -1951,7 +2049,7 @@ pub fn check_local_ssh_access(local_ssh_port: u16) -> SshConnectionTestResult {
 }
 
 #[tauri::command]
-pub fn open_remote_login_settings() -> Result<(), String> {
+pub fn open_remote_login_settings(terminal_id: Option<TerminalId>) -> Result<(), String> {
     match current_platform() {
         DesktopPlatform::Macos => {
             let status = Command::new("open")
@@ -2012,7 +2110,7 @@ pub fn open_remote_login_settings() -> Result<(), String> {
             ]
             .join(" ");
 
-            open_terminal_with_command(&instruction)
+            open_terminal_with_command(&instruction, terminal_id)
         }
         DesktopPlatform::Unknown => {
             Err("Открытие настроек Local SSH не поддержано для этой OS.".to_string())
@@ -2058,29 +2156,34 @@ pub fn request_remote_login(local_ssh_port: u16) -> Result<SshConnectionTestResu
 }
 
 #[tauri::command]
-pub fn open_server_terminal(config: ServerSessionConfig) -> Result<(), String> {
+pub fn open_server_terminal(
+    config: ServerSessionConfig,
+    terminal_id: Option<TerminalId>,
+) -> Result<(), String> {
     let ssh_command = build_interactive_ssh_command(&config)?;
-    open_terminal_with_command(&ssh_command)
+    open_terminal_with_command(&ssh_command, terminal_id)
 }
 
 #[tauri::command]
 pub fn open_server_terminal_command(
     config: ServerSessionConfig,
     command: String,
+    terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
     let command = trim_required(&command, "command")?;
     let ssh_command = build_remote_ssh_command(&config, &command)?;
-    open_terminal_with_command(&ssh_command)
+    open_terminal_with_command(&ssh_command, terminal_id)
 }
 
 #[tauri::command]
 pub fn open_server_key_install_terminal(
     config: ServerSessionConfig,
     command: String,
+    terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
     let command = trim_required(&command, "command")?;
     let ssh_command = build_key_install_ssh_command(&config, &command)?;
-    open_terminal_with_command(&ssh_command)
+    open_terminal_with_command(&ssh_command, terminal_id)
 }
 
 #[tauri::command]

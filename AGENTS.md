@@ -132,3 +132,18 @@ scripts/              Release scripts
 - Не редактировать чужие Codex CLI/app конфиги.
 - Не превращать repo в monorepo.
 - Не возвращать legacy Talkis audio/transcription/model-loading code.
+
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:local -->
+## Трекинг задач через bd (beads)
+
+- Для локального issue tracking используй `bd`.
+- Перед поиском новой работы проверяй `bd ready` или `bd status`.
+- Для новых задач используй `bd create`; для обновления статуса - `bd update`;
+  для закрытия - `bd close`.
+- Не создавай markdown TODO/task-list как параллельную систему трекинга, если
+  это не отдельный пользовательский запрос.
+- Не выполняй `git push`, `bd dolt push`, deploy или внешнюю синхронизацию без
+  явного запроса пользователя.
+
+<!-- END BEADS INTEGRATION -->

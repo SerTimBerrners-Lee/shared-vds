@@ -1,9 +1,9 @@
 [package]
 name = "shared-vds"
-version = "0.9.3"
+version = "0.9.4"
 description = "Shared VDS Desktop"
 authors = ["trixter"]
-license = "AGPL-3.0-or-later"
+license = "MIT"
 edition = "2021"
 default-run = "shared-vds"
 
