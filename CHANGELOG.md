@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-06-20
+
+### Changed
+- Rotated the Tauri updater public key for the Shared VDS release channel.
+- Configured the release workflow to use newly created updater signing secrets.
+
 ## [0.9.4] - 2026-06-20
 
 ### Added

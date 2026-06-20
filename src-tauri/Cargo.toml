@@ -1,6 +1,6 @@
 [package]
 name = "shared-vds"
-version = "0.9.4"
+version = "0.9.5"
 description = "Shared VDS Desktop"
 authors = ["trixter"]
 license = "MIT"
