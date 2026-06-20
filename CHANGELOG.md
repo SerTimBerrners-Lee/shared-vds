@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed updater metadata URLs to match GitHub release asset name normalization.
+
 ## [0.9.5] - 2026-06-20
 
 ### Changed

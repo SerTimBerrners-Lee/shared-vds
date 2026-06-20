@@ -29,6 +29,7 @@ python3 - "$BUILD_ROOT" "$LATEST_JSON_PATH" "$VERSION" "$PUB_DATE" "$REPOSITORY"
 import json
 from pathlib import Path
 import sys
+from urllib.parse import quote
 
 build_root, path, version, pub_date, repository, release_tag, required_platforms = sys.argv[1:]
 root = Path(build_root)
@@ -51,6 +52,9 @@ def find_artifact(patterns):
             return matches[0]
     return None
 
+def github_release_asset_name(name):
+    return name.replace(" ", ".")
+
 platforms = {}
 
 for platform, patterns in platform_specs.items():
@@ -63,7 +67,8 @@ for platform, patterns in platform_specs.items():
         raise SystemExit(f"Updater signature not found for {platform}: {signature_path}")
 
     signature = signature_path.read_text(encoding="utf-8").strip()
-    url = f"https://github.com/{repository}/releases/download/{release_tag}/{artifact.name}"
+    asset_name = github_release_asset_name(artifact.name)
+    url = f"https://github.com/{repository}/releases/download/{release_tag}/{quote(asset_name)}"
     platforms[platform] = {
         "signature": signature,
         "url": url,
