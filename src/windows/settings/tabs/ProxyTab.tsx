@@ -62,6 +62,10 @@ import {
   type VdsHealthStatus,
   type VdsSystemStatus,
 } from "../../../lib/serverSessionClient";
+import {
+  selectAvailableTerminalId,
+  shouldShowTerminalPicker,
+} from "../../../lib/terminalPicker";
 
 type NumericServerSessionField = "sshPort";
 
@@ -1446,16 +1450,14 @@ export function ProxyTab({
     vdsSystemStatus?.tools.sshKeygenAvailable === false
       ? t(missingSshKeygenKey(vdsSystemStatus.platform))
       : null;
-  const selectedTerminalId = useMemo<TerminalId>(() => {
-    if (
-      availableTerminals.some((terminal) => terminal.id === terminalPreference)
-    ) {
-      return terminalPreference;
-    }
-
-    return "system";
-  }, [availableTerminals, terminalPreference]);
-  const showTerminalMenu = availableTerminals.length > 1;
+  const selectedTerminalId = useMemo<TerminalId>(
+    () => selectAvailableTerminalId(availableTerminals, terminalPreference),
+    [availableTerminals, terminalPreference],
+  );
+  const showTerminalPicker = shouldShowTerminalPicker(
+    terminalsLoaded,
+    availableTerminals,
+  );
   const terminalLabel = (terminal: TerminalOption): string =>
     terminal.id === "system" ? t("session.terminalSystem") : terminal.label;
 
@@ -1521,6 +1523,12 @@ export function ProxyTab({
     terminalPreference,
     terminalsLoaded,
   ]);
+
+  useEffect(() => {
+    if (!showTerminalPicker) {
+      setTerminalMenuOpen(false);
+    }
+  }, [showTerminalPicker]);
 
   useEffect(() => {
     if (!terminalMenuOpen) {
@@ -2080,9 +2088,11 @@ export function ProxyTab({
             )}
             <span>{t("session.testConnection")}</span>
           </button>
-          {showTerminalMenu ? (
+          {showTerminalPicker ? (
             <div
-              className="server-session-terminal-split"
+              className={`server-session-terminal-split ${
+                terminalMenuOpen ? "is-open" : ""
+              }`}
               ref={terminalMenuRef}
             >
               <button
@@ -2106,7 +2116,6 @@ export function ProxyTab({
                 type="button"
                 className="btn server-session-terminal-toggle"
                 aria-label={t("session.chooseTerminal")}
-                aria-haspopup="menu"
                 aria-expanded={terminalMenuOpen}
                 title={t("session.chooseTerminal")}
                 disabled={openServerBusy}
@@ -2117,7 +2126,7 @@ export function ProxyTab({
                 <ChevronDown size={15} strokeWidth={2} aria-hidden="true" />
               </button>
               {terminalMenuOpen && (
-                <div className="server-session-terminal-menu" role="menu">
+                <div className="server-session-terminal-menu">
                   {availableTerminals.map((terminal) => {
                     const selected = terminal.id === selectedTerminalId;
 
@@ -2128,8 +2137,7 @@ export function ProxyTab({
                         className={`server-session-terminal-menu-item ${
                           selected ? "is-selected" : ""
                         }`}
-                        role="menuitemradio"
-                        aria-checked={selected}
+                        aria-pressed={selected}
                         onClick={() => {
                           onTerminalPreferenceChange(terminal.id);
                           setTerminalMenuOpen(false);

@@ -5,19 +5,23 @@ import type {
   VdsHealthSample,
   VdsHealthStatus,
 } from "./serverSessionClient";
+import { normalizeTerminalId } from "./terminalPicker";
 
 export type ThemePreference = "system" | "light" | "dark";
 export type InterfaceLanguage = "ru" | "en";
 export type TerminalId =
   | "system"
-  | "terminal"
+  | "ghostty"
+  | "warp"
+  | "iterm2"
+  | "alacritty"
+  | "kitty"
   | "windows-terminal"
   | "powershell"
-  | "x-terminal-emulator"
+  | "git-bash"
   | "gnome-terminal"
   | "konsole"
-  | "xfce4-terminal"
-  | "xterm";
+  | "xfce4-terminal";
 export type VdsHealthPollIntervalMs =
   | 5000
   | 10000
@@ -176,21 +180,7 @@ function parseInterfaceLanguage(value: unknown): InterfaceLanguage | undefined {
 }
 
 function parseTerminalPreference(value: unknown): TerminalId | undefined {
-  if (
-    value === "system" ||
-    value === "terminal" ||
-    value === "windows-terminal" ||
-    value === "powershell" ||
-    value === "x-terminal-emulator" ||
-    value === "gnome-terminal" ||
-    value === "konsole" ||
-    value === "xfce4-terminal" ||
-    value === "xterm"
-  ) {
-    return value;
-  }
-
-  return undefined;
+  return normalizeTerminalId(value);
 }
 
 function parseVdsHealthPollInterval(

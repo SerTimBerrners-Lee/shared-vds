@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -116,18 +116,61 @@ pub enum DesktopPlatform {
     Unknown,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminalId {
     System,
-    Terminal,
+    Ghostty,
+    Warp,
+    Iterm2,
+    Alacritty,
+    Kitty,
     WindowsTerminal,
     Powershell,
-    XTerminalEmulator,
+    GitBash,
     GnomeTerminal,
     Konsole,
     Xfce4Terminal,
-    Xterm,
+}
+
+impl<'de> Deserialize<'de> for TerminalId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "system" | "terminal" | "x-terminal-emulator" | "xterm" => Ok(TerminalId::System),
+            "ghostty" => Ok(TerminalId::Ghostty),
+            "warp" => Ok(TerminalId::Warp),
+            "iterm2" => Ok(TerminalId::Iterm2),
+            "alacritty" => Ok(TerminalId::Alacritty),
+            "kitty" => Ok(TerminalId::Kitty),
+            "windows-terminal" => Ok(TerminalId::WindowsTerminal),
+            "powershell" => Ok(TerminalId::Powershell),
+            "git-bash" => Ok(TerminalId::GitBash),
+            "gnome-terminal" => Ok(TerminalId::GnomeTerminal),
+            "konsole" => Ok(TerminalId::Konsole),
+            "xfce4-terminal" => Ok(TerminalId::Xfce4Terminal),
+            _ => Err(serde::de::Error::unknown_variant(
+                value.as_str(),
+                &[
+                    "system",
+                    "ghostty",
+                    "warp",
+                    "iterm2",
+                    "alacritty",
+                    "kitty",
+                    "windows-terminal",
+                    "powershell",
+                    "git-bash",
+                    "gnome-terminal",
+                    "konsole",
+                    "xfce4-terminal",
+                ],
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1363,14 +1406,6 @@ enum CommandLineSyntax {
     PowerShell,
 }
 
-fn current_command_line_syntax() -> CommandLineSyntax {
-    if cfg!(target_os = "windows") {
-        CommandLineSyntax::PowerShell
-    } else {
-        CommandLineSyntax::Posix
-    }
-}
-
 fn posix_shell_quote(value: &str) -> String {
     if value.is_empty() {
         "''".to_string()
@@ -1448,8 +1483,16 @@ fn build_interactive_ssh_command_for_syntax_with_options(
     Ok(parts.join(" "))
 }
 
-fn build_interactive_ssh_command(config: &ServerSessionConfig) -> Result<String, String> {
-    build_interactive_ssh_command_for_syntax(config, current_command_line_syntax())
+fn build_interactive_ssh_command_set(
+    config: &ServerSessionConfig,
+) -> Result<TerminalCommandSet, String> {
+    Ok(TerminalCommandSet {
+        posix: build_interactive_ssh_command_for_syntax(config, CommandLineSyntax::Posix)?,
+        powershell: build_interactive_ssh_command_for_syntax(
+            config,
+            CommandLineSyntax::PowerShell,
+        )?,
+    })
 }
 
 fn build_remote_ssh_command_for_syntax(
@@ -1478,11 +1521,22 @@ fn build_remote_ssh_command_for_syntax_with_options(
     Ok(command)
 }
 
-fn build_remote_ssh_command(
+fn build_remote_ssh_command_set(
     config: &ServerSessionConfig,
     remote_command: &str,
-) -> Result<String, String> {
-    build_remote_ssh_command_for_syntax(config, remote_command, current_command_line_syntax())
+) -> Result<TerminalCommandSet, String> {
+    Ok(TerminalCommandSet {
+        posix: build_remote_ssh_command_for_syntax(
+            config,
+            remote_command,
+            CommandLineSyntax::Posix,
+        )?,
+        powershell: build_remote_ssh_command_for_syntax(
+            config,
+            remote_command,
+            CommandLineSyntax::PowerShell,
+        )?,
+    })
 }
 
 fn build_key_install_ssh_command_for_syntax(
@@ -1515,11 +1569,22 @@ fn build_key_install_ssh_command_for_syntax(
     })
 }
 
-fn build_key_install_ssh_command(
+fn build_key_install_ssh_command_set(
     config: &ServerSessionConfig,
     remote_command: &str,
-) -> Result<String, String> {
-    build_key_install_ssh_command_for_syntax(config, remote_command, current_command_line_syntax())
+) -> Result<TerminalCommandSet, String> {
+    Ok(TerminalCommandSet {
+        posix: build_key_install_ssh_command_for_syntax(
+            config,
+            remote_command,
+            CommandLineSyntax::Posix,
+        )?,
+        powershell: build_key_install_ssh_command_for_syntax(
+            config,
+            remote_command,
+            CommandLineSyntax::PowerShell,
+        )?,
+    })
 }
 
 fn build_remote_tcp_check_command(
@@ -1624,6 +1689,46 @@ fn remote_tcp_available(config: &ServerSessionConfig, remote_port: u16) -> Remot
 }
 
 const TERMINAL_NOT_FOUND_PREFIX: &str = "TERMINAL_NOT_FOUND:";
+const WARP_SHARED_VDS_TAB_CONFIG_NAME: &str = "shared_vds_open";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalCommandSet {
+    posix: String,
+    powershell: String,
+}
+
+impl TerminalCommandSet {
+    fn same(command: &str) -> Self {
+        Self {
+            posix: command.to_string(),
+            powershell: command.to_string(),
+        }
+    }
+
+    fn command(&self, syntax: CommandLineSyntax) -> &str {
+        match syntax {
+            CommandLineSyntax::Posix => &self.posix,
+            CommandLineSyntax::PowerShell => &self.powershell,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalAvailability {
+    SystemTool,
+    SystemToolAlternatives(&'static [&'static str]),
+    GitBash,
+    MacosApplication(&'static str),
+    WarpUri(DesktopPlatform),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalPreparation {
+    WarpTabConfig {
+        platform: DesktopPlatform,
+        command: String,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalLaunch {
@@ -1631,128 +1736,289 @@ struct TerminalLaunch {
     program: String,
     args: Vec<String>,
     wait_for_exit: bool,
+    availability: TerminalAvailability,
+    preparation: Option<TerminalPreparation>,
 }
 
 fn terminal_launch_candidates(platform: DesktopPlatform, command: &str) -> Vec<TerminalLaunch> {
+    terminal_launch_candidates_for_commands(platform, &TerminalCommandSet::same(command))
+}
+
+fn terminal_launch_candidates_for_commands(
+    platform: DesktopPlatform,
+    commands: &TerminalCommandSet,
+) -> Vec<TerminalLaunch> {
     match platform {
         DesktopPlatform::Macos => {
-            let script = format!(
-                "tell application \"Terminal\" to do script \"{}\"",
-                applescript_quote(command)
-            );
-            vec![TerminalLaunch {
-                id: TerminalId::Terminal,
-                program: "osascript".to_string(),
-                args: vec![
-                    "-e".to_string(),
-                    script,
-                    "-e".to_string(),
-                    "tell application \"Terminal\" to activate".to_string(),
-                ],
-                wait_for_exit: true,
-            }]
+            macos_terminal_launch_candidates(commands.command(CommandLineSyntax::Posix))
         }
-        DesktopPlatform::Windows => vec![
-            TerminalLaunch {
-                id: TerminalId::WindowsTerminal,
-                program: "wt.exe".to_string(),
-                args: vec![
-                    "powershell.exe".to_string(),
-                    "-NoExit".to_string(),
-                    "-Command".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-            TerminalLaunch {
-                id: TerminalId::Powershell,
-                program: "powershell.exe".to_string(),
-                args: vec![
-                    "-NoExit".to_string(),
-                    "-Command".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-        ],
-        DesktopPlatform::Linux | DesktopPlatform::Unknown => vec![
-            TerminalLaunch {
-                id: TerminalId::XTerminalEmulator,
-                program: "x-terminal-emulator".to_string(),
-                args: vec![
-                    "-e".to_string(),
-                    "sh".to_string(),
-                    "-lc".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-            TerminalLaunch {
-                id: TerminalId::GnomeTerminal,
-                program: "gnome-terminal".to_string(),
-                args: vec![
-                    "--".to_string(),
-                    "sh".to_string(),
-                    "-lc".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-            TerminalLaunch {
-                id: TerminalId::Konsole,
-                program: "konsole".to_string(),
-                args: vec![
-                    "-e".to_string(),
-                    "sh".to_string(),
-                    "-lc".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-            TerminalLaunch {
-                id: TerminalId::Xfce4Terminal,
-                program: "xfce4-terminal".to_string(),
-                args: vec![
-                    "--command".to_string(),
-                    format!("sh -lc {}", posix_shell_quote(command)),
-                ],
-                wait_for_exit: false,
-            },
-            TerminalLaunch {
-                id: TerminalId::Xterm,
-                program: "xterm".to_string(),
-                args: vec![
-                    "-e".to_string(),
-                    "sh".to_string(),
-                    "-lc".to_string(),
-                    command.to_string(),
-                ],
-                wait_for_exit: false,
-            },
-        ],
+        DesktopPlatform::Windows => windows_terminal_launch_candidates(commands),
+        DesktopPlatform::Linux | DesktopPlatform::Unknown => {
+            let command = commands.command(CommandLineSyntax::Posix);
+            vec![
+                TerminalLaunch {
+                    id: TerminalId::System,
+                    program: "x-terminal-emulator".to_string(),
+                    args: terminal_e_args("sh", command),
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::SystemTool,
+                    preparation: None,
+                },
+                TerminalLaunch {
+                    id: TerminalId::Ghostty,
+                    program: "ghostty".to_string(),
+                    args: terminal_e_args("sh", command),
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::SystemTool,
+                    preparation: None,
+                },
+                TerminalLaunch {
+                    id: TerminalId::Warp,
+                    program: "warp-terminal".to_string(),
+                    args: vec![warp_tab_config_url().to_string()],
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::WarpUri(platform),
+                    preparation: Some(TerminalPreparation::WarpTabConfig {
+                        platform,
+                        command: command.to_string(),
+                    }),
+                },
+                TerminalLaunch {
+                    id: TerminalId::GnomeTerminal,
+                    program: "gnome-terminal".to_string(),
+                    args: vec![
+                        "--".to_string(),
+                        "sh".to_string(),
+                        "-lc".to_string(),
+                        command.to_string(),
+                    ],
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::SystemTool,
+                    preparation: None,
+                },
+                TerminalLaunch {
+                    id: TerminalId::Konsole,
+                    program: "konsole".to_string(),
+                    args: terminal_e_args("sh", command),
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::SystemTool,
+                    preparation: None,
+                },
+                TerminalLaunch {
+                    id: TerminalId::Xfce4Terminal,
+                    program: "xfce4-terminal".to_string(),
+                    args: vec![
+                        "--command".to_string(),
+                        format!("sh -lc {}", posix_shell_quote(command)),
+                    ],
+                    wait_for_exit: false,
+                    availability: TerminalAvailability::SystemTool,
+                    preparation: None,
+                },
+            ]
+        }
     }
+}
+
+fn macos_terminal_launch_candidates(command: &str) -> Vec<TerminalLaunch> {
+    let terminal_script = format!(
+        "tell application \"Terminal\" to do script \"{}\"",
+        applescript_quote(command)
+    );
+    let iterm_script = format!(
+        "tell application \"iTerm\" to activate\n\
+         tell application \"iTerm\" to set newWindow to (create window with default profile)\n\
+         tell application \"iTerm\" to tell current session of newWindow to write text \"{}\"",
+        applescript_quote(command)
+    );
+
+    vec![
+        TerminalLaunch {
+            id: TerminalId::System,
+            program: "osascript".to_string(),
+            args: vec![
+                "-e".to_string(),
+                terminal_script,
+                "-e".to_string(),
+                "tell application \"Terminal\" to activate".to_string(),
+            ],
+            wait_for_exit: true,
+            availability: TerminalAvailability::MacosApplication("Terminal"),
+            preparation: None,
+        },
+        macos_open_app_shell_candidate(TerminalId::Ghostty, "Ghostty", command),
+        TerminalLaunch {
+            id: TerminalId::Warp,
+            program: "open".to_string(),
+            args: vec![warp_tab_config_url().to_string()],
+            wait_for_exit: false,
+            availability: TerminalAvailability::WarpUri(DesktopPlatform::Macos),
+            preparation: Some(TerminalPreparation::WarpTabConfig {
+                platform: DesktopPlatform::Macos,
+                command: command.to_string(),
+            }),
+        },
+        TerminalLaunch {
+            id: TerminalId::Iterm2,
+            program: "osascript".to_string(),
+            args: vec!["-e".to_string(), iterm_script],
+            wait_for_exit: true,
+            availability: TerminalAvailability::MacosApplication("iTerm"),
+            preparation: None,
+        },
+        macos_open_app_shell_candidate(TerminalId::Alacritty, "Alacritty", command),
+        macos_open_app_shell_candidate(TerminalId::Kitty, "kitty", command),
+    ]
+}
+
+fn macos_open_app_shell_candidate(
+    id: TerminalId,
+    app_name: &'static str,
+    command: &str,
+) -> TerminalLaunch {
+    TerminalLaunch {
+        id,
+        program: "open".to_string(),
+        args: vec![
+            "-na".to_string(),
+            app_name.to_string(),
+            "--args".to_string(),
+            "-e".to_string(),
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            command.to_string(),
+        ],
+        wait_for_exit: false,
+        availability: TerminalAvailability::MacosApplication(app_name),
+        preparation: None,
+    }
+}
+
+fn windows_terminal_launch_candidates(commands: &TerminalCommandSet) -> Vec<TerminalLaunch> {
+    let powershell_command = commands.command(CommandLineSyntax::PowerShell);
+    let git_bash_command = commands.command(CommandLineSyntax::Posix);
+
+    vec![
+        TerminalLaunch {
+            id: TerminalId::System,
+            program: "cmd.exe".to_string(),
+            args: vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                "powershell.exe".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                powershell_command.to_string(),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::SystemTool,
+            preparation: None,
+        },
+        TerminalLaunch {
+            id: TerminalId::Ghostty,
+            program: "ghostty.exe".to_string(),
+            args: vec![
+                "-e".to_string(),
+                "powershell.exe".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                powershell_command.to_string(),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::SystemTool,
+            preparation: None,
+        },
+        TerminalLaunch {
+            id: TerminalId::Warp,
+            program: "cmd.exe".to_string(),
+            args: vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                warp_tab_config_url().to_string(),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::WarpUri(DesktopPlatform::Windows),
+            preparation: Some(TerminalPreparation::WarpTabConfig {
+                platform: DesktopPlatform::Windows,
+                command: powershell_command.to_string(),
+            }),
+        },
+        TerminalLaunch {
+            id: TerminalId::WindowsTerminal,
+            program: "wt.exe".to_string(),
+            args: vec![
+                "powershell.exe".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                powershell_command.to_string(),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::SystemTool,
+            preparation: None,
+        },
+        TerminalLaunch {
+            id: TerminalId::Powershell,
+            program: "powershell.exe".to_string(),
+            args: vec![
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                powershell_command.to_string(),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::SystemToolAlternatives(&[
+                "powershell.exe",
+                "pwsh.exe",
+            ]),
+            preparation: None,
+        },
+        TerminalLaunch {
+            id: TerminalId::GitBash,
+            program: "git-bash.exe".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!("{}; exec bash -l", git_bash_command),
+            ],
+            wait_for_exit: false,
+            availability: TerminalAvailability::GitBash,
+            preparation: None,
+        },
+    ]
+}
+
+fn terminal_e_args(shell: &str, command: &str) -> Vec<String> {
+    vec![
+        "-e".to_string(),
+        shell.to_string(),
+        "-lc".to_string(),
+        command.to_string(),
+    ]
 }
 
 fn terminal_option_label(id: TerminalId) -> &'static str {
     match id {
         TerminalId::System => "System default",
-        TerminalId::Terminal => "Terminal",
+        TerminalId::Ghostty => "Ghostty",
+        TerminalId::Warp => "Warp",
+        TerminalId::Iterm2 => "iTerm2",
+        TerminalId::Alacritty => "Alacritty",
+        TerminalId::Kitty => "kitty",
         TerminalId::WindowsTerminal => "Windows Terminal",
         TerminalId::Powershell => "PowerShell",
-        TerminalId::XTerminalEmulator => "System terminal",
+        TerminalId::GitBash => "Git Bash",
         TerminalId::GnomeTerminal => "GNOME Terminal",
         TerminalId::Konsole => "Konsole",
         TerminalId::Xfce4Terminal => "Xfce Terminal",
-        TerminalId::Xterm => "xterm",
     }
 }
 
 fn terminal_launch_candidates_for_selection(
     platform: DesktopPlatform,
-    command: &str,
+    commands: &TerminalCommandSet,
     terminal_id: Option<TerminalId>,
 ) -> Vec<TerminalLaunch> {
-    let candidates = terminal_launch_candidates(platform, command);
+    let candidates = terminal_launch_candidates_for_commands(platform, commands);
 
     match terminal_id {
         Some(id) if id != TerminalId::System => {
@@ -1774,13 +2040,169 @@ fn terminal_launch_candidates_for_selection(
 }
 
 fn terminal_launcher_available(platform: DesktopPlatform) -> bool {
-    if platform == DesktopPlatform::Macos {
-        return system_tool_available("osascript");
-    }
-
     terminal_launch_candidates(platform, "true")
         .iter()
-        .any(|candidate| system_tool_available(&candidate.program))
+        .any(terminal_candidate_available)
+}
+
+fn terminal_candidate_available(candidate: &TerminalLaunch) -> bool {
+    resolve_terminal_program(candidate).is_some()
+}
+
+fn resolve_terminal_program(candidate: &TerminalLaunch) -> Option<String> {
+    match candidate.availability {
+        TerminalAvailability::SystemTool => {
+            system_tool_available(&candidate.program).then(|| candidate.program.clone())
+        }
+        TerminalAvailability::SystemToolAlternatives(programs) => programs
+            .iter()
+            .find(|program| system_tool_available(program))
+            .map(|program| (*program).to_string()),
+        TerminalAvailability::GitBash => {
+            git_bash_executable().map(|path| path.to_string_lossy().into_owned())
+        }
+        TerminalAvailability::MacosApplication(app_name) => {
+            macos_application_available(app_name).then(|| candidate.program.clone())
+        }
+        TerminalAvailability::WarpUri(platform) => {
+            warp_uri_available(platform).then(|| candidate.program.clone())
+        }
+    }
+}
+
+fn macos_application_available(app_name: &str) -> bool {
+    if !system_tool_available("osascript") {
+        return false;
+    }
+
+    let script = format!("id of app \"{}\"", applescript_quote(app_name));
+    Command::new("osascript")
+        .args(["-e", script.as_str()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn git_bash_executable() -> Option<PathBuf> {
+    if system_tool_available("git-bash.exe") {
+        return Some(PathBuf::from("git-bash.exe"));
+    }
+
+    windows_program_files_dirs()
+        .into_iter()
+        .map(|dir| dir.join("Git").join("git-bash.exe"))
+        .find(|path| executable_file_exists(path))
+}
+
+fn windows_program_files_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for key in ["ProgramFiles", "PROGRAMFILES", "ProgramFiles(x86)"] {
+        if let Some(value) = env::var_os(key) {
+            let path = PathBuf::from(value);
+            if !dirs.iter().any(|existing| existing == &path) {
+                dirs.push(path);
+            }
+        }
+    }
+
+    for path in [
+        PathBuf::from(r"C:\Program Files"),
+        PathBuf::from(r"C:\Program Files (x86)"),
+    ] {
+        if !dirs.iter().any(|existing| existing == &path) {
+            dirs.push(path);
+        }
+    }
+
+    dirs
+}
+
+fn warp_uri_available(platform: DesktopPlatform) -> bool {
+    match platform {
+        DesktopPlatform::Macos => macos_application_available("Warp"),
+        DesktopPlatform::Linux | DesktopPlatform::Unknown => system_tool_available("warp-terminal"),
+        DesktopPlatform::Windows => {
+            system_tool_available("cmd.exe")
+                && (system_tool_available("warp.exe") || windows_warp_data_root_exists())
+        }
+    }
+}
+
+fn windows_warp_data_root_exists() -> bool {
+    [env::var_os("APPDATA"), env::var_os("LOCALAPPDATA")]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::from)
+        .any(|dir| dir.join("warp").join("Warp").exists())
+}
+
+fn warp_tab_config_dir(platform: DesktopPlatform) -> Result<PathBuf, String> {
+    match platform {
+        DesktopPlatform::Macos => {
+            let home_dir =
+                dirs::home_dir().ok_or_else(|| "Home directory was not found".to_string())?;
+            Ok(home_dir.join(".warp").join("tab_configs"))
+        }
+        DesktopPlatform::Windows => env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|path| {
+                path.join("warp")
+                    .join("Warp")
+                    .join("data")
+                    .join("tab_configs")
+            })
+            .ok_or_else(|| "APPDATA directory was not found".to_string()),
+        DesktopPlatform::Linux | DesktopPlatform::Unknown => {
+            let data_home = env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("share")))
+                .ok_or_else(|| "Home directory was not found".to_string())?;
+
+            Ok(data_home.join("warp-terminal").join("tab_configs"))
+        }
+    }
+}
+
+fn warp_tab_config_url() -> &'static str {
+    "warp://tab_config/shared_vds_open"
+}
+
+fn prepare_warp_tab_config(platform: DesktopPlatform, command: &str) -> Result<(), String> {
+    let tab_configs_dir = warp_tab_config_dir(platform)?;
+    fs::create_dir_all(&tab_configs_dir)
+        .map_err(|error| format!("Failed to create Warp tab config directory: {}", error))?;
+
+    let command_value = toml_basic_string(command)?;
+    let tab_config = format!(
+        r#"name = "Shared VDS"
+title = "Shared VDS"
+
+[[panes]]
+id = "main"
+type = "terminal"
+commands = [{}]
+is_focused = true
+"#,
+        command_value
+    );
+    let tab_config_path = tab_configs_dir.join(format!("{}.toml", WARP_SHARED_VDS_TAB_CONFIG_NAME));
+    fs::write(&tab_config_path, tab_config).map_err(|error| {
+        format!(
+            "Failed to write Warp tab config {}: {}",
+            tab_config_path.display(),
+            error
+        )
+    })?;
+
+    Ok(())
+}
+
+fn toml_basic_string(value: &str) -> Result<String, String> {
+    serde_json::to_string(value)
+        .map_err(|error| format!("Failed to encode terminal command: {}", error))
 }
 
 fn terminal_not_found_error(command: &str) -> String {
@@ -1788,7 +2210,17 @@ fn terminal_not_found_error(command: &str) -> String {
 }
 
 fn run_terminal_launch(candidate: &TerminalLaunch) -> Result<(), String> {
-    let mut command = Command::new(&candidate.program);
+    if let Some(preparation) = &candidate.preparation {
+        match preparation {
+            TerminalPreparation::WarpTabConfig { platform, command } => {
+                prepare_warp_tab_config(*platform, command)?;
+            }
+        }
+    }
+
+    let program = resolve_terminal_program(candidate)
+        .ok_or_else(|| format!("Terminal program `{}` was not found", candidate.program))?;
+    let mut command = Command::new(program);
     command
         .args(&candidate.args)
         .stdin(Stdio::null())
@@ -1820,12 +2252,19 @@ fn open_terminal_with_command(
     command: &str,
     terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
-    let candidates =
-        terminal_launch_candidates_for_selection(current_platform(), command, terminal_id);
+    open_terminal_with_commands(&TerminalCommandSet::same(command), terminal_id)
+}
+
+fn open_terminal_with_commands(
+    commands: &TerminalCommandSet,
+    terminal_id: Option<TerminalId>,
+) -> Result<(), String> {
+    let platform = current_platform();
+    let candidates = terminal_launch_candidates_for_selection(platform, commands, terminal_id);
     let mut last_error: Option<String> = None;
 
     for candidate in candidates {
-        if !system_tool_available(&candidate.program) {
+        if !terminal_candidate_available(&candidate) {
             continue;
         }
 
@@ -1835,7 +2274,13 @@ fn open_terminal_with_command(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| terminal_not_found_error(command)))
+    Err(last_error.unwrap_or_else(|| {
+        let syntax = match platform {
+            DesktopPlatform::Windows => CommandLineSyntax::PowerShell,
+            _ => CommandLineSyntax::Posix,
+        };
+        terminal_not_found_error(commands.command(syntax))
+    }))
 }
 
 #[tauri::command]
@@ -1847,7 +2292,7 @@ pub fn get_available_terminals() -> Vec<TerminalOption> {
     }];
 
     for candidate in terminal_launch_candidates(platform, "true") {
-        if !system_tool_available(&candidate.program)
+        if !terminal_candidate_available(&candidate)
             || terminals.iter().any(|terminal| terminal.id == candidate.id)
         {
             continue;
@@ -2160,8 +2605,8 @@ pub fn open_server_terminal(
     config: ServerSessionConfig,
     terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
-    let ssh_command = build_interactive_ssh_command(&config)?;
-    open_terminal_with_command(&ssh_command, terminal_id)
+    let ssh_commands = build_interactive_ssh_command_set(&config)?;
+    open_terminal_with_commands(&ssh_commands, terminal_id)
 }
 
 #[tauri::command]
@@ -2171,8 +2616,8 @@ pub fn open_server_terminal_command(
     terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
     let command = trim_required(&command, "command")?;
-    let ssh_command = build_remote_ssh_command(&config, &command)?;
-    open_terminal_with_command(&ssh_command, terminal_id)
+    let ssh_commands = build_remote_ssh_command_set(&config, &command)?;
+    open_terminal_with_commands(&ssh_commands, terminal_id)
 }
 
 #[tauri::command]
@@ -2182,8 +2627,8 @@ pub fn open_server_key_install_terminal(
     terminal_id: Option<TerminalId>,
 ) -> Result<(), String> {
     let command = trim_required(&command, "command")?;
-    let ssh_command = build_key_install_ssh_command(&config, &command)?;
-    open_terminal_with_command(&ssh_command, terminal_id)
+    let ssh_commands = build_key_install_ssh_command_set(&config, &command)?;
+    open_terminal_with_commands(&ssh_commands, terminal_id)
 }
 
 #[tauri::command]
@@ -2693,7 +3138,40 @@ DISK_USED_BYTES=3000
 
     #[test]
     fn terminal_launch_candidates_keep_expected_order() {
+        let macos = terminal_launch_candidates(DesktopPlatform::Macos, "ssh example");
+        let macos_ids = macos
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            macos_ids,
+            vec![
+                TerminalId::System,
+                TerminalId::Ghostty,
+                TerminalId::Warp,
+                TerminalId::Iterm2,
+                TerminalId::Alacritty,
+                TerminalId::Kitty
+            ]
+        );
+        assert_eq!(macos[0].program, "osascript");
+
         let linux = terminal_launch_candidates(DesktopPlatform::Linux, "ssh example");
+        let linux_ids = linux
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linux_ids,
+            vec![
+                TerminalId::System,
+                TerminalId::Ghostty,
+                TerminalId::Warp,
+                TerminalId::GnomeTerminal,
+                TerminalId::Konsole,
+                TerminalId::Xfce4Terminal
+            ]
+        );
         let linux_programs = linux
             .iter()
             .map(|candidate| candidate.program.as_str())
@@ -2702,18 +3180,47 @@ DISK_USED_BYTES=3000
             linux_programs,
             vec![
                 "x-terminal-emulator",
+                "ghostty",
+                "warp-terminal",
                 "gnome-terminal",
                 "konsole",
-                "xfce4-terminal",
-                "xterm"
+                "xfce4-terminal"
             ]
         );
+        assert_eq!(linux[0].id, TerminalId::System);
+        assert!(!linux_programs.contains(&"xterm"));
 
         let windows = terminal_launch_candidates(DesktopPlatform::Windows, "ssh example");
-        let windows_programs = windows
+        let windows_ids = windows
             .iter()
-            .map(|candidate| candidate.program.as_str())
+            .map(|candidate| candidate.id)
             .collect::<Vec<_>>();
-        assert_eq!(windows_programs, vec!["wt.exe", "powershell.exe"]);
+        assert_eq!(
+            windows_ids,
+            vec![
+                TerminalId::System,
+                TerminalId::Ghostty,
+                TerminalId::Warp,
+                TerminalId::WindowsTerminal,
+                TerminalId::Powershell,
+                TerminalId::GitBash
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_id_deserializes_legacy_preferences_as_system() {
+        for value in ["system", "terminal", "x-terminal-emulator", "xterm"] {
+            let json = serde_json::to_string(value).unwrap();
+            assert_eq!(
+                serde_json::from_str::<TerminalId>(&json).unwrap(),
+                TerminalId::System
+            );
+        }
+
+        assert_eq!(
+            serde_json::from_str::<TerminalId>("\"git-bash\"").unwrap(),
+            TerminalId::GitBash
+        );
     }
 }

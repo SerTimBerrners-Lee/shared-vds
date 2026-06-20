@@ -57,6 +57,12 @@ Desktop сейчас не отвечает за:
   `127.0.0.1:<remoteTunnelPort>` вел на локальный SSH пользователя.
 - На VDS пользователь сам выполняет команду входа обратно в локальный проект и
   запускает нужные инструменты.
+- Для helper-действий открытия SSH desktop всегда держит `Системный` терминал
+  как вариант по умолчанию. Если обнаружены дополнительные терминалы, UI
+  показывает split-button picker:
+  - macOS: Ghostty, Warp, iTerm2, Alacritty, kitty;
+  - Windows: Ghostty, Warp, Windows Terminal, PowerShell, Git Bash;
+  - Linux: Ghostty, Warp, GNOME Terminal, Konsole, Xfce Terminal.
 
 ## Стек
 

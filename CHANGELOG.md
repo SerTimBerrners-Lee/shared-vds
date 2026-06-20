@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-06-20
+
+### Changed
+- Reworked terminal discovery to keep `System` as the default option and expose
+  only the strict per-platform picker matrix: Ghostty, Warp, and three popular
+  terminals for macOS, Windows, and Linux.
+- Added native best-effort launch paths for iTerm2, Alacritty, kitty, Git Bash,
+  and Warp Tab Configs across supported platforms.
+
 ### Fixed
 - Fixed updater metadata URLs to match GitHub release asset name normalization.
+- Mapped legacy saved terminal preferences (`terminal`, `x-terminal-emulator`,
+  `xterm`) back to `system`.
 
 ## [0.9.5] - 2026-06-20
 
