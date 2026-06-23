@@ -27,6 +27,13 @@ pub fn run() {
                 let _ = settings_window::open_settings(handle).await;
             });
 
+            // Фоновый вотчдог туннелей: держит reverse/local SSH-туннели живыми
+            // независимо от того, открыто окно настроек или нет.
+            let watchdog_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                commands::server_session::run_tunnel_watchdog(watchdog_handle);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

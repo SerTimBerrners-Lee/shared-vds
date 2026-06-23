@@ -195,8 +195,9 @@ select {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  /* Без backdrop-filter: фон .app-root непрозрачный и почти ровный, поэтому blur
+     визуально незаметен, но при скролле заставляет WKWebView пересчитывать
+     размытие на каждый кадр — это и давало рывки. */
 }
 
 .surface {
@@ -431,8 +432,6 @@ select {
   min-inline-size: 0;
   padding: 14px 10px 12px;
   background: color-mix(in srgb, var(--titlebar-bg) 76%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
 }
 
 .settings-sidebar-main {

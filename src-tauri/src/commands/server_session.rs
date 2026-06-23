@@ -10,10 +10,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use tauri::Manager;
+
 use crate::logger;
 
 const TUNNEL_RESTART_BACKOFF: Duration = Duration::from_secs(5);
 const TUNNEL_HEALTH_TIMEOUT: Duration = Duration::from_millis(900);
+/// Как часто фоновый вотчдог проверяет живость туннелей и при необходимости их
+/// перезапускает. Работает независимо от того, открыто окно или нет.
+const TUNNEL_WATCHDOG_INTERVAL: Duration = Duration::from_secs(4);
+/// Как часто вотчдог выполняет дорогую remote-проверку порта VDS по SSH.
+/// Сама проверка делается вне блокировки карты туннелей.
+const TUNNEL_REMOTE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 const VDS_HEALTH_TIMEOUT: Duration = Duration::from_secs(7);
 const VDS_LOCATION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const VDS_LOCATION_SUCCESS_TTL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -80,7 +88,7 @@ pub struct ReverseTunnelConfig {
     local_port: u16,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSessionStatus {
     tunnel_id: Option<String>,
@@ -284,6 +292,10 @@ struct TunnelProcess {
     local_ssh_port: u16,
     last_error: Option<String>,
     next_restart_at: Option<Instant>,
+    /// Закэшированный результат последней remote-проверки порта VDS
+    /// (status, message). Используется, чтобы не запускать SSH на каждый тик.
+    last_remote_health: Option<(String, Option<String>)>,
+    last_remote_health_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -304,6 +316,10 @@ impl TunnelStartupContext {
 pub struct ServerSessionManager {
     local_tunnels: Mutex<HashMap<String, TunnelProcess>>,
     reverse_tunnels: Mutex<HashMap<String, TunnelProcess>>,
+    /// Последние посчитанные вотчдогом статусы. Команды статуса читают этот кэш
+    /// мгновенно, без блокирующего сетевого I/O на main-потоке UI.
+    local_status_cache: Mutex<Vec<ServerSessionStatus>>,
+    reverse_status_cache: Mutex<Vec<ServerSessionStatus>>,
 }
 
 impl ServerSessionManager {
@@ -311,6 +327,8 @@ impl ServerSessionManager {
         Self {
             local_tunnels: Mutex::new(HashMap::new()),
             reverse_tunnels: Mutex::new(HashMap::new()),
+            local_status_cache: Mutex::new(Vec::new()),
+            reverse_status_cache: Mutex::new(Vec::new()),
         }
     }
 }
@@ -669,21 +687,71 @@ fn stopped_status(tunnel_id: String, error_message: Option<String>) -> ServerSes
     }
 }
 
+/// Полная (блокирующая) проверка здоровья: локальный порт + при необходимости
+/// remote-проверка порта VDS по SSH. Может занимать секунды, поэтому в фоновом
+/// вотчдоге вызывается вне блокировки карты туннелей.
 fn tunnel_health(process: &TunnelProcess) -> (String, Option<String>) {
     match &process.spec {
-        TunnelSpec::Local(tunnel) => {
-            if local_tcp_available(tunnel.local_port) {
-                ("connected".to_string(), None)
-            } else {
-                (
-                    "degraded".to_string(),
-                    Some(format!(
-                        "SSH туннель работает, но локальный порт 127.0.0.1:{} не отвечает.",
-                        tunnel.local_port
-                    )),
-                )
-            }
+        TunnelSpec::Local(tunnel) => local_tunnel_health(tunnel.local_port),
+        TunnelSpec::Reverse(tunnel) => {
+            probe_reverse_health(&process.config, tunnel.remote_port, tunnel.local_port)
         }
+    }
+}
+
+fn local_tunnel_health(local_port: u16) -> (String, Option<String>) {
+    if local_tcp_available(local_port) {
+        ("connected".to_string(), None)
+    } else {
+        (
+            "degraded".to_string(),
+            Some(format!(
+                "SSH туннель работает, но локальный порт 127.0.0.1:{} не отвечает.",
+                local_port
+            )),
+        )
+    }
+}
+
+/// Блокирующая remote-проверка reverse-туннеля: локальный порт + SSH-проверка
+/// порта VDS. Выделена отдельно, чтобы вотчдог мог звать её вне лока.
+fn probe_reverse_health(
+    config: &ServerSessionConfig,
+    remote_port: u16,
+    local_port: u16,
+) -> (String, Option<String>) {
+    if !local_tcp_available(local_port) {
+        return (
+            "degraded".to_string(),
+            Some(local_ssh_unavailable_message(local_port, current_platform())),
+        );
+    }
+
+    match remote_tcp_available(config, remote_port) {
+        RemoteTcpCheckResult::Available => ("connected".to_string(), None),
+        RemoteTcpCheckResult::Unavailable => (
+            "degraded".to_string(),
+            Some(format!(
+                "SSH туннель работает, но порт VDS 127.0.0.1:{} не отвечает.",
+                remote_port
+            )),
+        ),
+        RemoteTcpCheckResult::Failed(message) => (
+            "degraded".to_string(),
+            Some(format!(
+                "SSH туннель работает, но проверка порта VDS 127.0.0.1:{} не выполнилась: {}",
+                remote_port, message
+            )),
+        ),
+    }
+}
+
+/// Дешёвое здоровье без блокирующего SSH: локальная TCP-проверка плюс
+/// закэшированный результат последней remote-проверки. Используется вотчдогом
+/// под локом, чтобы не держать карту туннелей во время SSH.
+fn cheap_tunnel_health(process: &TunnelProcess) -> (String, Option<String>) {
+    match &process.spec {
+        TunnelSpec::Local(tunnel) => local_tunnel_health(tunnel.local_port),
         TunnelSpec::Reverse(tunnel) => {
             if !local_tcp_available(tunnel.local_port) {
                 return (
@@ -695,22 +763,9 @@ fn tunnel_health(process: &TunnelProcess) -> (String, Option<String>) {
                 );
             }
 
-            match remote_tcp_available(&process.config, tunnel.remote_port) {
-                RemoteTcpCheckResult::Available => ("connected".to_string(), None),
-                RemoteTcpCheckResult::Unavailable => (
-                    "degraded".to_string(),
-                    Some(format!(
-                        "SSH туннель работает, но порт VDS 127.0.0.1:{} не отвечает.",
-                        tunnel.remote_port
-                    )),
-                ),
-                RemoteTcpCheckResult::Failed(message) => (
-                    "degraded".to_string(),
-                    Some(format!(
-                        "SSH туннель работает, но проверка порта VDS 127.0.0.1:{} не выполнилась: {}",
-                        tunnel.remote_port, message
-                    )),
-                ),
+            match &process.last_remote_health {
+                Some((status, message)) => (status.clone(), message.clone()),
+                None => ("connected".to_string(), None),
             }
         }
     }
@@ -783,13 +838,16 @@ fn maybe_restart_tunnel(process: &mut TunnelProcess) {
     }
 }
 
-fn status_from_process(process: &mut TunnelProcess) -> ServerSessionStatus {
+/// Снимает зомби-процесс ssh, если он завершился, и помечает туннель к
+/// немедленному перезапуску. Не делает сетевых проверок.
+fn reap_process(process: &mut TunnelProcess) {
     if let Some(child) = process.child.as_mut() {
         match child.try_wait() {
             Ok(Some(exit_status)) => {
                 let message = format!("SSH tunnel exited with status {}", exit_status);
                 logger::log_error("SERVER_SESSION", &message);
                 process.child = None;
+                process.last_remote_health = None;
                 process.last_error = Some(message);
                 process.next_restart_at = Some(Instant::now());
             }
@@ -798,27 +856,20 @@ fn status_from_process(process: &mut TunnelProcess) -> ServerSessionStatus {
                 let message = format!("Failed to inspect SSH tunnel: {}", error);
                 logger::log_error("SERVER_SESSION", &message);
                 process.child = None;
+                process.last_remote_health = None;
                 process.last_error = Some(message);
                 process.next_restart_at = Some(Instant::now());
             }
         }
     }
+}
 
-    maybe_restart_tunnel(process);
-
-    let pid = process.child.as_ref().map(|child| child.id());
-    let (status, health_message) = if pid.is_some() {
-        tunnel_health(process)
-    } else {
-        (
-            "error".to_string(),
-            process
-                .last_error
-                .clone()
-                .or_else(|| Some("SSH туннель не запущен.".to_string())),
-        )
-    };
-
+fn status_struct(
+    process: &TunnelProcess,
+    status: String,
+    health_message: Option<String>,
+    pid: Option<u32>,
+) -> ServerSessionStatus {
     ServerSessionStatus {
         tunnel_id: Some(process.tunnel_id.clone()),
         label: Some(process.label.clone()),
@@ -828,6 +879,48 @@ fn status_from_process(process: &mut TunnelProcess) -> ServerSessionStatus {
         local_ssh_port: Some(process.local_ssh_port),
         error_message: health_message,
     }
+}
+
+fn not_running_health(process: &TunnelProcess) -> (String, Option<String>) {
+    (
+        "error".to_string(),
+        process
+            .last_error
+            .clone()
+            .or_else(|| Some("SSH туннель не запущен.".to_string())),
+    )
+}
+
+/// Полный расчёт статуса с блокирующей проверкой здоровья. Используется на пути
+/// пользовательских команд (start/stop), где это происходит редко.
+fn status_from_process(process: &mut TunnelProcess) -> ServerSessionStatus {
+    reap_process(process);
+    maybe_restart_tunnel(process);
+
+    let pid = process.child.as_ref().map(|child| child.id());
+    let (status, health_message) = if pid.is_some() {
+        tunnel_health(process)
+    } else {
+        not_running_health(process)
+    };
+
+    status_struct(process, status, health_message, pid)
+}
+
+/// Дешёвый расчёт статуса для вотчдога: reap + restart + локальная проверка,
+/// без блокирующего SSH (берётся закэшированный last_remote_health).
+fn status_from_process_cached(process: &mut TunnelProcess) -> ServerSessionStatus {
+    reap_process(process);
+    maybe_restart_tunnel(process);
+
+    let pid = process.child.as_ref().map(|child| child.id());
+    let (status, health_message) = if pid.is_some() {
+        cheap_tunnel_health(process)
+    } else {
+        not_running_health(process)
+    };
+
+    status_struct(process, status, health_message, pid)
 }
 
 fn status_from_map(
@@ -841,11 +934,100 @@ fn status_from_map(
     status_from_process(process)
 }
 
-fn statuses_from_map(tunnels: &mut HashMap<String, TunnelProcess>) -> Vec<ServerSessionStatus> {
-    let ids = tunnels.keys().cloned().collect::<Vec<_>>();
-    ids.into_iter()
-        .map(|id| status_from_map(tunnels, &id))
-        .collect()
+/// Один тик вотчдога для одной карты туннелей. Фаза 1 под локом — reap +
+/// перезапуск + дешёвый статус, плюс сбор throttled-заданий на remote-проверку.
+/// Фаза 2 вне лока — дорогая SSH-проверка порта VDS. Фаза 3 — публикация в кэш.
+fn tick_tunnel_map(
+    tunnels: &Mutex<HashMap<String, TunnelProcess>>,
+    cache: &Mutex<Vec<ServerSessionStatus>>,
+) {
+    let mut statuses: Vec<ServerSessionStatus>;
+    let mut probe_jobs: Vec<(String, ServerSessionConfig, u16, u16)> = Vec::new();
+
+    {
+        let mut map = tunnels.lock().unwrap_or_else(|error| error.into_inner());
+        let ids: Vec<String> = map.keys().cloned().collect();
+        statuses = Vec::with_capacity(ids.len());
+
+        for id in &ids {
+            let Some(process) = map.get_mut(id) else {
+                continue;
+            };
+
+            let status = status_from_process_cached(process);
+
+            if let TunnelSpec::Reverse(tunnel) = &process.spec {
+                let due = process.child.is_some()
+                    && process
+                        .last_remote_health_at
+                        .map_or(true, |at| at.elapsed() >= TUNNEL_REMOTE_HEALTH_INTERVAL);
+
+                if due {
+                    process.last_remote_health_at = Some(Instant::now());
+                    probe_jobs.push((
+                        id.clone(),
+                        process.config.clone(),
+                        tunnel.remote_port,
+                        tunnel.local_port,
+                    ));
+                }
+            }
+
+            statuses.push(status);
+        }
+    }
+
+    for (id, config, remote_port, local_port) in probe_jobs {
+        let health = probe_reverse_health(&config, remote_port, local_port);
+
+        {
+            let mut map = tunnels.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(process) = map.get_mut(&id) {
+                process.last_remote_health = Some(health.clone());
+            }
+        }
+
+        if let Some(status) = statuses
+            .iter_mut()
+            .find(|status| status.tunnel_id.as_deref() == Some(id.as_str()))
+        {
+            // Уточняем статус только у живого туннеля: reap между фазами мог его
+            // убить, и тогда фоновую remote-проверку игнорируем.
+            if status.pid.is_some() {
+                status.status = health.0.clone();
+                status.error_message = health.1.clone();
+            }
+        }
+    }
+
+    {
+        let mut cached = cache.lock().unwrap_or_else(|error| error.into_inner());
+        *cached = statuses;
+    }
+}
+
+/// Бесконечный цикл фонового вотчдога. Запускается в отдельном потоке из
+/// `lib.rs` и поддерживает туннели живыми всё время работы приложения —
+/// независимо от того, открыто окно настроек или скрыто.
+pub fn run_tunnel_watchdog(app: tauri::AppHandle) {
+    loop {
+        {
+            let manager = app.state::<ServerSessionManager>();
+            tick_tunnel_map(&manager.reverse_tunnels, &manager.reverse_status_cache);
+            tick_tunnel_map(&manager.local_tunnels, &manager.local_status_cache);
+        }
+
+        thread::sleep(TUNNEL_WATCHDOG_INTERVAL);
+    }
+}
+
+/// Немедленно убирает туннель из кэша статусов (например, после ручного stop),
+/// чтобы UI не «мигал» закэшированным connected до следующего тика вотчдога.
+fn drop_cached_status(cache: &Mutex<Vec<ServerSessionStatus>>, tunnel_id: &str) {
+    cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|status| status.tunnel_id.as_deref() != Some(tunnel_id));
 }
 
 fn add_non_multiplexed_ssh_options(command: &mut Command) -> &mut Command {
@@ -926,9 +1108,11 @@ fn build_local_ssh_command(
         .arg("-o")
         .arg("ExitOnForwardFailure=yes")
         .arg("-o")
-        .arg("ServerAliveInterval=30")
+        .arg("ServerAliveInterval=15")
         .arg("-o")
         .arg("ServerAliveCountMax=3")
+        .arg("-o")
+        .arg("TCPKeepAlive=yes")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg("-o")
@@ -976,9 +1160,11 @@ fn build_reverse_ssh_command(
         .arg("-o")
         .arg("ExitOnForwardFailure=yes")
         .arg("-o")
-        .arg("ServerAliveInterval=30")
+        .arg("ServerAliveInterval=15")
         .arg("-o")
         .arg("ServerAliveCountMax=3")
+        .arg("-o")
+        .arg("TCPKeepAlive=yes")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg("-o")
@@ -2326,8 +2512,7 @@ fn local_ssh_support(local_ssh_port: u16) -> LocalSshSupport {
     }
 }
 
-#[tauri::command]
-pub fn get_vds_system_status(local_ssh_port: u16) -> VdsSystemStatus {
+fn compute_vds_system_status(local_ssh_port: u16) -> VdsSystemStatus {
     let platform = current_platform();
     let ssh_available = system_tool_available("ssh");
     let ssh_keygen_available = system_tool_available("ssh-keygen");
@@ -2344,6 +2529,18 @@ pub fn get_vds_system_status(local_ssh_port: u16) -> VdsSystemStatus {
             missing_tools,
         },
         local_ssh: local_ssh_support(local_ssh_port),
+    }
+}
+
+#[tauri::command]
+pub async fn get_vds_system_status(local_ssh_port: u16) -> VdsSystemStatus {
+    // local_ssh_support делает блокирующий TCP-connect (до 900 мс). Уводим его
+    // с main-потока через spawn_blocking, чтобы UI не фризился на каждый поллинг.
+    match tauri::async_runtime::spawn_blocking(move || compute_vds_system_status(local_ssh_port))
+        .await
+    {
+        Ok(status) => status,
+        Err(_) => compute_vds_system_status(local_ssh_port),
     }
 }
 
@@ -2635,22 +2832,24 @@ pub fn open_server_key_install_terminal(
 pub fn get_server_session_status(
     manager: tauri::State<'_, ServerSessionManager>,
 ) -> Vec<ServerSessionStatus> {
-    let mut tunnels = manager
-        .reverse_tunnels
+    // Отдаём закэшированные вотчдогом статусы. Никакого блокирующего сетевого
+    // I/O на main-потоке UI — поэтому скролл и интерфейс не подвисают.
+    manager
+        .reverse_status_cache
         .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    statuses_from_map(&mut tunnels)
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
 }
 
 #[tauri::command]
 pub fn get_local_tunnel_status(
     manager: tauri::State<'_, ServerSessionManager>,
 ) -> Vec<ServerSessionStatus> {
-    let mut tunnels = manager
-        .local_tunnels
+    manager
+        .local_status_cache
         .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    statuses_from_map(&mut tunnels)
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
 }
 
 fn captured_ssh_lines(lines: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
@@ -2805,6 +3004,8 @@ pub fn start_local_tunnel(
             local_ssh_port: tunnel.local_port,
             last_error: None,
             next_restart_at: None,
+            last_remote_health: None,
+            last_remote_health_at: None,
         },
     );
 
@@ -2842,6 +3043,9 @@ pub fn stop_local_tunnel(
             &format!("Local SSH tunnel stopped ({})", tunnel_id),
         );
     }
+
+    drop(tunnels);
+    drop_cached_status(&manager.local_status_cache, &tunnel_id);
 
     Ok(ServerSessionStatus {
         tunnel_id: Some(tunnel_id),
@@ -2905,6 +3109,8 @@ pub fn start_server_session_tunnel(
             local_ssh_port: tunnel.local_port,
             last_error: None,
             next_restart_at: None,
+            last_remote_health: None,
+            last_remote_health_at: None,
         },
     );
 
@@ -2942,6 +3148,9 @@ pub fn stop_server_session_tunnel(
             &format!("Reverse SSH tunnel stopped ({})", tunnel_id),
         );
     }
+
+    drop(tunnels);
+    drop_cached_status(&manager.reverse_status_cache, &tunnel_id);
 
     Ok(ServerSessionStatus {
         tunnel_id: Some(tunnel_id),

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-06-23
+
+### Fixed
+- Reverse and local SSH tunnels now stay alive in the background. A dedicated
+  watchdog thread reaps dead `ssh` processes and restarts dropped tunnels on its
+  own schedule, independent of whether the settings window is open or visible.
+  Previously liveness checks and restarts only ran while the window polled, so a
+  tunnel that dropped in the background only came back when the user reopened the
+  app.
+- Removed UI freezes and scroll stutter. Tunnel and system status commands used
+  to perform blocking network I/O (local TCP probes and a remote SSH port check,
+  up to several seconds) on the main thread on every poll. Status commands now
+  return cached results computed by the watchdog, so the UI never blocks.
+- Dropped `backdrop-filter` blur from scrollable surfaces and cards. The app
+  background is opaque, so the blur was visually negligible but forced the macOS
+  WebView to recomposite on every scroll frame.
+
+### Changed
+- Reverse/local SSH tunnels now use `TCPKeepAlive=yes` and a shorter
+  `ServerAliveInterval` (15s) so dropped links are detected and restarted faster.
+- The remote VDS port health probe is throttled to once per 30s and runs off the
+  tunnels lock; `get_vds_system_status` no longer runs on the main thread.
+
 ## [0.9.6] - 2026-06-20
 
 ### Changed

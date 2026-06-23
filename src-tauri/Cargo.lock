@@ -3779,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "shared-vds"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
